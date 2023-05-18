@@ -836,11 +836,13 @@ def find_triangles_by_edge(nodes_df, edges_df):
             rand = np.random.rand()
             if rand < .5:
                 tmp.add((u,v,u))
+                z=u
             else:
                 tmp.add((u,v,v)) # we cannot use frozenset with 2 equal nodes
+                z=v
             #else: tmp.add(frozenset(u,v,vertices[0]))
 
-            triangles_dict[frozenset((u,v))] = tmp
+            triangles_dict[frozenset((u,v))] = [vertices[0], z]
 
         elif len(vertices) == 2:
             t1, t2 = frozenset((u,v,vertices[0])), frozenset((u,v,vertices[1]))
@@ -849,7 +851,7 @@ def find_triangles_by_edge(nodes_df, edges_df):
             triangles.add(t1)
             triangles.add(t2)
 
-            triangles_dict[frozenset((u,v))] = tmp
+            triangles_dict[frozenset((u,v))] = vertices
 
         elif len(vertices) == 3:
             t1, t2, t3 = frozenset((u,v,vertices[0])), frozenset((u,v,vertices[1])), frozenset((u,v,vertices[2]))
@@ -862,13 +864,14 @@ def find_triangles_by_edge(nodes_df, edges_df):
                     print("------ Removing outer triangles -------")
                     try: 
                         tmp.remove(frozenset(G.neighbors(n)))
+                        vertices.remove(n)
                     except:
                         print("------No Outer Triangle for: ", list(G.neighbors(n)), " ----------")
 
             triangles.add(list(tmp)[0])
             triangles.add(list(tmp)[1])
 
-            triangles_dict[frozenset((u,v))] = tmp
+            triangles_dict[frozenset((u,v))] = vertices
 
     
     return triangles, triangles_dict

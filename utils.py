@@ -162,7 +162,7 @@ def get_dataset(args, dataset_folder, setPath=None, add_self_edges=False, is_deb
     val_paths = []
 
     # folder = "dataset"
-    folder = "debug"
+    folder = "ground_truth"
 
     
     if not is_debug:
@@ -247,7 +247,7 @@ def get_dataset_gcn(args, dataset_folder, setPath=None, add_self_edges=False, is
 
     dataset_folder = 'datasets'
    
-    folder = "debug"
+    folder = "ground_truth"
     #folder = "cell_density_dataset"  ### Use only if debug in config.json is true. Used for testing and debuging
     if not is_debug:
         train_glob = glob.glob(
@@ -623,11 +623,14 @@ def concat_node_representations_double_triangle(features, edges, triangles, devi
 
 
     for u, v in edges:
-        t12 = list(triangles.get(frozenset((u,v))))
-        t1, t2 = list(t12[0]), list(t12[1])
-
-        z = t1[t1!=u and t1!=v]
-        w = t2[t2!=u and t2!=v]
+        
+        t12 = triangles.get(frozenset((u,v)))
+        #print("Triangles: ", t12)
+        #print("Edge: ", (u,v))
+        if not t12 is None:
+            print("------ Padding ------")
+            z, w = t12[0], t12[1]
+        else: z, w = u, v
 
 
         
