@@ -704,7 +704,7 @@ def main():
 
                 # classify
                 if config["classifier"] == "mlp":
-                 
+                
                     out1, out2 = utils.concat_node_representations_double(out, edges, device)
                     scores1 = mlp(out1)
                     scores2 = mlp(out2)
