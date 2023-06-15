@@ -17,8 +17,8 @@
     "out_dim": 16,
     "save": true,
     "mode" : "train",
-    "classifier": "mlp_tri", 
-    "model": "n1_e1234_egnnc_mlp_tri_entropy_density_drop05_epoch100_hid16_out16_70_30_split_exp_saved_model",
+    "classifier": "mlp", 
+    "model": "n1_e1234_egnnc_mlp_entropy_density_drop05_epoch100_hid16_out16_70_30_split_exp_saved_model",
     "model_id": "n1_e1234",
     "gnn_type": "egnnc",
     "is_debug": false

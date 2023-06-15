@@ -810,7 +810,7 @@ def find_triangles_old(nodes_df, edges_df):
     return set(map(tuple, triangles))
     #return [list(x) for x in set(tuple(x) for x in triangles)]
 
-def find_triangles_by_edge(nodes_df, edges_df):
+def find_triangles_by_edge(nodes_df, edges_df, DROP_EDGES=False):
     # Create a NetworkX graph from the nodes and edges DataFrames
     G = nx.Graph()
     G.add_nodes_from(nodes_df['id'])
@@ -827,22 +827,29 @@ def find_triangles_by_edge(nodes_df, edges_df):
         vertices = sorted(neighbors_u.intersection(neighbors_v))
 
         if len(vertices) == 1: 
-            #triangles_dict[frozenset((u,v))] = 
-            t1 = frozenset((u,v,vertices[0]))
-            tmp.add(t1)
-            triangles.add(t1)
-            # MAYBE WE CAN DEAL WITH PADDING LATER IN THE CODE
-            #PADDING: add random vertex = u,v or z    
-            rand = np.random.rand()
-            if rand < .5:
-                tmp.add((u,v,u))
-                z=u
+            if DROP_EDGES:
+                print("Dropping edge ({},{})".format(u,v))
+                # drop edge from df
+                edges_df = edges_df.drop(edges_df[(edges_df['source'] == u) & (edges_df['target'] == v)].index)
+                edges_df = edges_df.drop(edges_df[(edges_df['source'] == v) & (edges_df['target'] == u)].index)
+                continue
             else:
-                tmp.add((u,v,v)) # we cannot use frozenset with 2 equal nodes
-                z=v
-            #else: tmp.add(frozenset(u,v,vertices[0]))
+                #triangles_dict[frozenset((u,v))] = 
+                t1 = frozenset((u,v,vertices[0]))
+                tmp.add(t1)
+                triangles.add(t1)
+                # MAYBE WE CAN DEAL WITH PADDING LATER IN THE CODE
+                #PADDING: add random vertex = u,v or z    
+                rand = np.random.rand()
+                if rand < .5:
+                    tmp.add((u,v,u))
+                    z=u
+                else:
+                    tmp.add((u,v,v)) # we cannot use frozenset with 2 equal nodes
+                    z=v
+                #else: tmp.add(frozenset(u,v,vertices[0]))
 
-            triangles_dict[frozenset((u,v))] = [vertices[0], z]
+                triangles_dict[frozenset((u,v))] = [vertices[0], z]
 
         elif len(vertices) == 2:
             t1, t2 = frozenset((u,v,vertices[0])), frozenset((u,v,vertices[1]))
@@ -853,7 +860,55 @@ def find_triangles_by_edge(nodes_df, edges_df):
 
             triangles_dict[frozenset((u,v))] = vertices
 
-        elif len(vertices) == 3:
+
+
+        elif len(vertices) > 2:
+            #print("More than 2 neighbors for edge ({},{})".format(u,v))
+            #print("Neighbors: ", vertices)
+            # Get the edges information
+            filtered_edges = edges_df[(edges_df['source'].isin([u, v, *vertices])) | (edges_df['target'].isin([u, v, *vertices]))]
+            # convert distance to float
+            filtered_edges['distance'] = filtered_edges['distance'].astype(float)
+            distances = filtered_edges.groupby(['source', 'target'])['distance'].min().reset_index()
+            #print("ok1")
+            neighbor_distances = distances[(distances['source'].isin(vertices)) & (distances['target'].isin([u,v])) |
+                                            (distances['target'].isin(vertices)) & (distances['source'].isin([u,v]))]
+            #print("Neighbor distances: ", neighbor_distances)
+            #print("ok2")
+            sorted_distances = neighbor_distances.sort_values('distance')
+            #print("Sorted distances: ", sorted_distances)
+            #print("ok3")
+            
+            closest_nodes = []
+
+            # Iterate through the sorted distances
+            for _, row in sorted_distances.iterrows():
+                source, target = row['source'], row['target']
+
+                # append the closest nodes to the list if in vertices and common neighbors of u and v
+                if (source in vertices) and (target == u or target == v) and (source not in closest_nodes):
+                    closest_nodes.append(source)
+                elif (target in vertices) and (source == u or source == v) and (target not in closest_nodes):
+                    closest_nodes.append(target)
+
+
+               # Break the loop if we have found the required number of closest nodes
+                if len(closest_nodes) >= 2:
+                    break
+            
+            #print("ok4")
+            #print("Closest nodes: ", closest_nodes)
+            t1, t2 = frozenset((u,v,closest_nodes[0])), frozenset((u,v,closest_nodes[1]))
+            triangles_dict[frozenset((u,v))] = closest_nodes
+            #print("Triangles: ", t1, t2)
+
+            triangles.add(t1)
+            triangles.add(t2)
+
+
+        elif len(vertices) == 0:
+            print("-------------ERROR--------------------")
+            # This shpuldn't happen - SKIPP this part for now, i just kept this code for later 
             t1, t2, t3 = frozenset((u,v,vertices[0])), frozenset((u,v,vertices[1])), frozenset((u,v,vertices[2]))
             tmp.add(t1)
             tmp.add(t2)
@@ -871,10 +926,10 @@ def find_triangles_by_edge(nodes_df, edges_df):
             triangles.add(list(tmp)[0])
             triangles.add(list(tmp)[1])
 
-            triangles_dict[frozenset((u,v))] = vertices
+            triangles_dict[frozenset((u,v))] = vertices            
 
     
-    return triangles, triangles_dict
+    return triangles, triangles_dict, edges_df
 
 class KIGraphDatasetSUBGCN(Dataset):
 
@@ -909,9 +964,9 @@ class KIGraphDatasetSUBGCN(Dataset):
         node_path = path[2]
 
         # with glob
-        edges = pd.read_csv(edge_path)
+        edges_df = pd.read_csv(edge_path)
         nodes = pd.read_csv(node_path)
-        self.triangles, self.triangles_dict = find_triangles_by_edge(nodes, edges)
+        self.triangles, self.triangles_dict, edges = find_triangles_by_edge(nodes, edges_df)
 
         if add_self_edges:
             for i in range(len(nodes)):
@@ -1235,9 +1290,6 @@ class KIGraphDatasetSUBGCN(Dataset):
         edges = np.array([sample[0].numpy() for sample in batch])
         labels = torch.FloatTensor([sample[1] for sample in batch])
         dist = torch.from_numpy(self.dist)
-
-        # return also the triangle_tensor 
-        #triangle_tensor = self.triangle_tensor
 
         return adj, features, edge_features, edges, labels, dist, self.triangles_dict
 

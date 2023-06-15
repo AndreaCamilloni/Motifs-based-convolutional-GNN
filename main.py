@@ -258,8 +258,8 @@ def main():
                         all_pairs = sigmoid(all_pairs)
                         scores = 1 - all_pairs[edges.T]
 
-                    #loss = criterion(scores, labels.float()) # Loss function for BCE loss
-                    loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
+                    loss = criterion(scores, labels.float()) # Loss function for BCE loss
+                    #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
                     loss.backward()
                     optimizer.step()
                     with torch.no_grad():
@@ -405,7 +405,8 @@ def main():
         plt.xlabel('Threshold')
         plt.title('TPR / TNR vs Threshold')
         plt.legend()
-        plt.show()
+        plt.savefig('../results/TPR_TNT_v_threshold.png')
+        plt.close()
 
         # Choose an appropriate threshold and generate classification report on the validation set.
         idx1 = np.where(tpr <= tnr)[0]
@@ -473,8 +474,8 @@ def main():
                         all_pairs = sigmoid(all_pairs)
                         scores = 1 - all_pairs[edges.T]
 
-                    #loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
-                    loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
+                    loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
+                    #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
 
                     running_loss += loss.item()
                     total_loss += loss.item()
@@ -604,8 +605,8 @@ def main():
                     all_pairs = sigmoid(all_pairs)
                     scores = 1 - all_pairs[edges.T]
 
-                #loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
-                loss = utils.get_focal_loss_criterion(scores, labels.float()) # Loss function for Focal Loss 
+                loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
+                #loss = utils.get_focal_loss_criterion(scores, labels.float()) # Loss function for Focal Loss 
 
                 running_loss += loss.item()
                 total_loss += loss.item()
@@ -738,9 +739,9 @@ def main():
                     all_pairs = sigmoid(all_pairs)
                     scores = 1 - all_pairs[edges.T]
                     
-                #loss = criterion(scores, labels.float())  # Loss function for BCE Loss 
+                loss = criterion(scores, labels.float())  # Loss function for BCE Loss 
                
-                loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
+                #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
                 running_loss += loss.item()
                 total_loss += loss.item()
                 predictions = (scores >= t).long()

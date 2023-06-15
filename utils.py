@@ -245,9 +245,9 @@ def get_dataset_gcn(args, dataset_folder, setPath=None, add_self_edges=False, is
     test_paths = []
     val_paths = []
 
-    dataset_folder = 'datasets'
+    dataset_folder = 'tmp'
    
-    folder = "ground_truth"
+    folder = "debug"
     #folder = "cell_density_dataset"  ### Use only if debug in config.json is true. Used for testing and debuging
     if not is_debug:
         train_glob = glob.glob(
@@ -572,92 +572,41 @@ def concat_node_respresentations_double_with_biNTN(features, edges,  device="cpu
     return out1,out2
 
 
-def concat_node_representations_double_triangle(features, edges, triangles, device="cpu"):
-    """
-    Parameters
-    ----------
-    features : torch.Tensor
-        features[i] is the representation of node i.
-    device : string
-        'cpu' or 'cuda:0'. Default: 'cpu'.
-    Returns
-    ----------
-    uvz: torch.Tensor
-        Concatinated features.
-    vuz: torch.Tensor
-        Concatinated features.
-    vzu: torch.Tensor
-        Concatinated features.
-    uzv: torch.Tensor
-        Concatinated features.
-    zuv: torch.Tensor
-        Concatinated features.
-    zvu: torch.Tensor
-        Concatinated features.
-    uvw: torch.Tensor
-        Concatinated features.
-    vuw: torch.Tensor
-        Concatinated features.
-    vwu: torch.Tensor
-        Concatinated features.
-    uwv: torch.Tensor
-        Concatinated features.
-    wuv: torch.Tensor
-        Concatinated features.
-    wvu: torch.Tensor
-        Concatinated features.
-    """
-    uvz = torch.FloatTensor().to(device)
-    vuz = torch.FloatTensor().to(device)
-    vzu = torch.FloatTensor().to(device)
-    uzv = torch.FloatTensor().to(device)
-    zuv = torch.FloatTensor().to(device)
-    zvu = torch.FloatTensor().to(device)
-
-    uvw = torch.FloatTensor().to(device)
-    vuw = torch.FloatTensor().to(device)
-    vwu = torch.FloatTensor().to(device)
-    uwv = torch.FloatTensor().to(device)
-    wuv = torch.FloatTensor().to(device)
-    wvu = torch.FloatTensor().to(device)
-
-
+def create_TriangularMotifsCNN_input(features, edges, triangles, device="cpu"):
+   
+    _u = torch.FloatTensor().to(device)
+    _v = torch.FloatTensor().to(device)
+    
+    _z = torch.FloatTensor().to(device)
+    _w = torch.FloatTensor().to(device)
+    
+    count = 0
     for u, v in edges:
         
         t12 = triangles.get(frozenset((u,v)))
         #print("Triangles: ", t12)
         #print("Edge: ", (u,v))
         if not t12 is None:
-            print("------ Padding ------")
             z, w = t12[0], t12[1]
-        else: z, w = u, v
+        else:
+            #print("------ Padding ------")
+            print("Edge: ", (u,v))
+            count += 1
+            z, w = u, v
 
-
+        _u = torch.cat((_u, features[u].reshape(1, -1)), dim=0)
+        _v = torch.cat((_v, features[v].reshape(1, -1)), dim=0)
+        _z = torch.cat((_z, features[int(z)].reshape(1, -1)), dim=0)
+        _w = torch.cat((_w, features[int(w)].reshape(1, -1)), dim=0)
         
-        uvz = torch.cat((uvz, torch.cat((features[u], features[v], features[z])).reshape(1, -1)), dim=0)
-        vuz = torch.cat((vuz, torch.cat((features[v], features[u], features[z])).reshape(1, -1)), dim=0)
-        vzu = torch.cat((vzu, torch.cat((features[v], features[z], features[u])).reshape(1, -1)), dim=0)
-        uzv = torch.cat((uzv, torch.cat((features[u], features[z], features[v])).reshape(1, -1)), dim=0)
-        zuv = torch.cat((zuv, torch.cat((features[z], features[u], features[v])).reshape(1, -1)), dim=0)
-        zvu = torch.cat((zvu, torch.cat((features[z], features[v], features[u])).reshape(1, -1)), dim=0)
 
-        uvw = torch.cat((uvw, torch.cat((features[u], features[v], features[w])).reshape(1, -1)), dim=0)
-        vuw = torch.cat((vuw, torch.cat((features[v], features[u], features[w])).reshape(1, -1)), dim=0)
-        vwu = torch.cat((vwu, torch.cat((features[v], features[w], features[u])).reshape(1, -1)), dim=0)
-        uwv = torch.cat((uwv, torch.cat((features[u], features[w], features[v])).reshape(1, -1)), dim=0)
-        wuv = torch.cat((wuv, torch.cat((features[w], features[u], features[v])).reshape(1, -1)), dim=0)
-        wvu = torch.cat((wvu, torch.cat((features[w], features[v], features[u])).reshape(1, -1)), dim=0)
-
-
-        #node12 = torch.cat((features[node1], features[node2])).reshape(1, -1)
-        #node21 = torch.cat((features[node2], features[node1])).reshape(1, -1)
- 
-        #out1 = torch.cat((out1, node12), dim=0)
-        #print('<<<<< Out put concat shape ' + str(out1.shape))
-        #out2 = torch.cat((out2, node21), dim=0)
-
-    return uvz, vuz, vzu, uzv, zuv, zvu, uvw, vuw, vwu, uwv, wuv, wvu
-
+    if count> 0:
+        print("Padding count: ", count)
+        # some padding is required even if we pad when creating the triangles
+    
+    input_data = torch.stack([_u,_v,_z,_w], dim=1)
+    input_data = input_data.permute(0,1,2) # (batch_size, number of channels, number of features) = (number of batches, 4, 64)
+    return input_data
 
 
 def parse_args():
