@@ -619,10 +619,10 @@ class KIGraphDatasetGCN(Dataset):
             neg_examples_close_to_edges = np.array(neg_examples_close_to_edges, dtype=np.int64)
         else:  # Undersample negative samples from adjacency edges not in positive
 
-            #num_neg_examples = pos_examples_crossing_edges.shape[0] # for BCE loss function 
+            num_neg_examples = pos_examples_crossing_edges.shape[0] # for BCE loss function 
 
             #If using Focal Loss function use the next line else comment it and uncomment the line above for BCE loss 
-            num_neg_examples = int(pos_examples_crossing_edges.shape[0]) # Increasing the size of neg_samples for focal loss function as it can handle class imbalance 
+            #num_neg_examples = int(pos_examples_crossing_edges.shape[0]) # Increasing the size of neg_samples for focal loss function as it can handle class imbalance 
             
             while cur < num_neg_examples:
                 u, v = _choice(n_count, 2, replace=False)
@@ -1183,10 +1183,10 @@ class KIGraphDatasetSUBGCN(Dataset):
             neg_examples_close_to_edges = np.array(neg_examples_close_to_edges, dtype=np.int64)
         else:  # Undersample negative samples from adjacency edges not in positive
 
-            #num_neg_examples = pos_examples_crossing_edges.shape[0] # for BCE loss function 
+            num_neg_examples = pos_examples_crossing_edges.shape[0] # for BCE loss function 
 
             #If using Focal Loss function use the next line else comment it and uncomment the line above for BCE loss 
-            num_neg_examples = int(pos_examples_crossing_edges.shape[0]) # Increasing the size of neg_samples for focal loss function as it can handle class imbalance 
+            #num_neg_examples = int(pos_examples_crossing_edges.shape[0]) # Increasing the size of neg_samples for focal loss function as it can handle class imbalance 
             
             while cur < num_neg_examples:
                 u, v = _choice(n_count, 2, replace=False)

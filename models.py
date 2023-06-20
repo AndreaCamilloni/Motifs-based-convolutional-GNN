@@ -215,7 +215,7 @@ class AAGNN(nn.Module):
 
 
 class EGNNC(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, channel_dim, dropout=0.5, device='cpu', num_layers=2):
+    def __init__(self, input_dim, hidden_dim, output_dim, channel_dim, dropout=0.5, device='cpu'):
         """
         Parameters
         ----------
@@ -240,9 +240,12 @@ class EGNNC(nn.Module):
         self.device = device
 
         self.elu = nn.ELU()
-        self.egnn_in = EGNNCLayer(input_dim, hidden_dim, channel_dim, device=device)
-        self.egnn_hidden = nn.ModuleList([EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device) for _ in range(num_layers-2)])        
-        self.egnn_out = EGNNCLayer(hidden_dim*channel_dim, output_dim, channel_dim, device=device)
+        self.egnn1 = EGNNCLayer(input_dim, hidden_dim, channel_dim, device=device)
+        self.egnn2 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        self.egnn3 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        self.egnn4 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        #self.egnn5 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        self.egnn6 = EGNNCLayer(hidden_dim*channel_dim, output_dim, channel_dim, device=device)
 
     def forward(self, features, edge_features):
         """
@@ -257,19 +260,27 @@ class EGNNC(nn.Module):
         out : torch.Tensor
             An (len(node_layers[-1]) x output_dim) tensor of output node features.
         """
-        x = self.egnn_in(features, edge_features)
+        x = self.egnn1(features, edge_features)
         x = F.elu(x)
         x = F.dropout(x, self.dropout, training=self.training)
-        for layer in self.egnn_hidden:
-            x = layer(x, edge_features)
-            x = F.elu(x)
-            x = F.dropout(x, self.dropout, training=self.training)
-        x = self.egnn_out(x, edge_features)
+        x = self.egnn2(x, edge_features)
+        x = F.elu(x)
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = self.egnn3(x, edge_features)
+        x = F.elu(x)
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = self.egnn4(x, edge_features)
+        x = F.elu(x)
+        #x = F.dropout(x, self.dropout, training=self.training)
+        #x = self.egnn5(x, edge_features)
+        #x = F.elu(x)
+        
+        x = self.egnn6(x, edge_features)
+        
         return x
 
-
 class TriangularMotifsCNN(nn.Module):
-    def __init__(self, num_channels = 4, output_dim = 1, dropout=0.5, device='cpu', activation = 'relu'):
+    def __init__(self, num_channels = 4, output_dim = 1, dropout=0.5, device='cpu'):
         super(TriangularMotifsCNN, self).__init__()
         self.conv1 = nn.Conv1d(num_channels, 16, kernel_size=3, stride=1, padding=1).to(device)
         self.conv2 = nn.Conv1d(16, 32, kernel_size=3, stride=1, padding=1).to(device)
@@ -277,33 +288,19 @@ class TriangularMotifsCNN(nn.Module):
         self.fc2 = nn.Linear(128, output_dim, bias=True).to(device)  # Output size is 1  for regression
         self.dropout = dropout
         self.training = True
-
-        if activation == 'relu':
-            self.activation = F.relu
-        elif activation == 'leaky_relu':
-            self.activation = F.leaky_relu
-        elif activation == 'elu':
-            self.activation = F.elu
-        else:
-            raise ValueError('Activation function not supported.')
     
     def forward(self, x):
-        x = self.activation(self.conv1(x))
-        x = self.activation(self.conv2(x))
+        x = F.leaky_relu(self.conv1(x))
+        x = F.leaky_relu(self.conv2(x))
         x = x.view(x.size(0), -1)  # Flatten the tensor
         
         # Fully connected layers
-        x = self.activation(self.fc1(x))
+        x = F.leaky_relu(self.fc1(x))
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.fc2(x)
         out = x.reshape(-1)
-
-        # Add sigmoid later
-        # out = F.sigmoid(x)
         
         return out
-    
-
 
 class MLPTwoLayers(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1, dropout=0.5, device='cpu'):
