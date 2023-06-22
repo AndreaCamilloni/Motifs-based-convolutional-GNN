@@ -280,11 +280,11 @@ class EGNNC(nn.Module):
         return x
 
 class TriangularMotifsCNN(nn.Module):
-    def __init__(self, num_channels = 4, output_dim = 1, dropout=0.5, device='cpu'):
+    def __init__(self, num_channels = 4, output_dim = 1, dropout=0.5, device='cpu', input_size = 64):
         super(TriangularMotifsCNN, self).__init__()
         self.conv1 = nn.Conv1d(num_channels, 16, kernel_size=3, stride=1, padding=1).to(device)
         self.conv2 = nn.Conv1d(16, 32, kernel_size=3, stride=1, padding=1).to(device)
-        self.fc1 = nn.Linear(32 * 64, 128, bias=True).to(device)  # Adjust the input size based on your data
+        self.fc1 = nn.Linear(32 * input_size, 128, bias=True).to(device)  # Adjust the input size based on your data
         self.fc2 = nn.Linear(128, output_dim, bias=True).to(device)  # Output size is 1  for regression
         self.dropout = dropout
         self.training = True

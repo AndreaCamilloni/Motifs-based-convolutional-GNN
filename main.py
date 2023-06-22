@@ -72,14 +72,17 @@ def main():
         mlp.to(config["device"])
 
     if config["classifier"] == "mlp_tri":
-        mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*3, hidden_dim=output_dim*3, output_dim=1, dropout=0.5)
+        mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*4, hidden_dim=output_dim*2, output_dim=1, dropout=0.5)
         mlp.to(config["device"])
 
     if config["classifier"] == "mlp_bi_ntn":
         ntn_embedding_size = 64
         mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*2 + ntn_embedding_size, hidden_dim=output_dim*2, output_dim=1, dropout=0.5)
         mlp.to(config["device"])             
-        
+
+    if config["classifier"] == "cnn":
+        cnn = models.TriangularMotifsCNN(num_channels = 4, input_size=channel_dim*output_dim)
+        cnn.to(config["device"])
 
 
     if config['val'] or config['test']:
@@ -102,6 +105,11 @@ def main():
             fnamemlp = 'mlp_bi_ntn' + fname
             pathmlp = os.path.join(directory, fnamemlp)
             mlp.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
+            
+        if config["classifier"] == "cnn":
+            fnamemlp = 'cnn' + fname
+            pathmlp = os.path.join(directory, fnamemlp)
+            cnn.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
 
     print(model)
 
@@ -145,15 +153,16 @@ def main():
 
                     # classify
                     if config["classifier"] == "mlp_tri":
-                        uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
                         #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvz)
-                        scores12 = mlp(vuz)
-                        scores21 = mlp(uvw)
-                        scores22 = mlp(vuw)
-                        scores1 = sigmoid(scores11 + scores12)
-                        scores2 = sigmoid(scores21 + scores22)
-                        scores = (scores1 + scores2)/2
+                        scores11 = mlp(uvzw)
+                        scores12 = mlp(uvwz)
+                        scores21 = mlp(vuzw)
+                        scores22 = mlp(vuwz)
+                        scores1 = (scores11 + scores21)/2
+                        scores2 = (scores21 + scores22)/2
+                        scores = sigmoid(scores1 + scores2)
 
 
                     if config["classifier"] == "mlp_bi_ntn":
@@ -161,6 +170,12 @@ def main():
                         scores1 = mlp(out1)
                         scores2 = mlp(out2)
                         scores = 1-sigmoid(scores1 + scores2)
+
+                    if config["classifier"] == "cnn":           
+                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
+                   
+                        scores = sigmoid(cnn(out1))
+ 
 
                     if config["classifier"] == "pos_sig":
                         all_pairs = torch.mm(out, out.t())
@@ -191,11 +206,15 @@ def main():
         #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1500, gamma=0.8)
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5, 10, 15, 20, 25], gamma=0.5) # Epoch decay
         model.train()
-        if config["classifier"] == "mlp" or config["classifier"] == "mlp_bi_ntn" :
+        if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri" :
             mlp.train()
+        if config["classifier"] == "cnn":
+            cnn.train()
         print('--------------------------------')
         print('Training.')
+        loss_vals = []
         for epoch in range(epochs):
+            _epoch_loss = []
             print('Epoch {} / {}'.format(epoch+1, epochs))
 
             epoch_loss = 0.0
@@ -232,21 +251,27 @@ def main():
 
                     # classify
                     if config["classifier"] == "mlp_tri":
-                        uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
                         #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvz)
-                        scores12 = mlp(vuz)
-                        scores21 = mlp(uvw)
-                        scores22 = mlp(vuw)
-                        scores1 = sigmoid(scores11 + scores12)
-                        scores2 = sigmoid(scores21 + scores22)
-                        scores = (scores1 + scores2)/2
+                        scores11 = mlp(uvzw)
+                        scores12 = mlp(uvwz)
+                        scores21 = mlp(vuzw)
+                        scores22 = mlp(vuwz)
+                        scores1 = (scores11 + scores21)/2
+                        scores2 = (scores21 + scores22)/2
+                        scores = sigmoid(scores1 + scores2)
 
                     if config["classifier"] == "mlp_bi_ntn":
                         out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
                         scores1 = mlp(out1)
                         scores2 = mlp(out2)
                         scores = 1-sigmoid(scores1 + scores2)
+                    
+                    if config["classifier"] == "cnn":           
+                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
+                   
+                        scores = sigmoid(cnn(out1))                
 
                     if config["classifier"] == "pos_sig":
                         all_pairs = torch.mm(out, out.t())
@@ -265,6 +290,7 @@ def main():
                     with torch.no_grad():
                         running_loss += loss.item()
                         epoch_loss += loss.item()
+                        _epoch_loss.append(loss.item())
                         if (torch.sum(labels.long() == 0).item() > 0) and (torch.sum(labels.long() == 1).item() > 0):
                             area = roc_auc_score(labels.detach().cpu().numpy(), scores.detach().cpu().numpy())
                             epoch_roc += area
@@ -277,7 +303,19 @@ def main():
             scheduler.step()
             print("Epoch avg loss: {}".format(epoch_loss / epoch_batches))
             print("Epoch avg ROC_AUC score: {}".format(epoch_roc / epoch_batches))
+            loss_vals.append(sum(_epoch_loss)/len(_epoch_loss))
 
+        plt.plot(np.linspace(1, epochs, epochs).astype(int), loss_vals)
+        plt.xlabel('epochs')
+        plt.title('Training Loss')
+        plt.legend()
+        
+        
+        plt.savefig('../results/training_loss.png')
+        plt.show(block=False)
+        plt.close()
+         
+         
         print('Finished training.')
         print('--------------------------------')
 
@@ -312,6 +350,13 @@ def main():
                 fnamemlp = 'mlp_bi_ntn' + fname
                 pathmlp = os.path.join(directory, fnamemlp)
                 torch.save(mlp.state_dict(), pathmlp)
+            print('Finished saving model.')
+            print('--------------------------------')
+         
+            if config["classifier"] == "cnn":
+                fnamemlp = 'cnn' + fname
+                pathmlp = os.path.join(directory, fnamemlp)
+                torch.save(cnn.state_dict(), pathmlp)
             print('Finished saving model.')
             print('--------------------------------')
 
@@ -357,21 +402,27 @@ def main():
 
                     # classify
                     if config["classifier"] == "mlp_tri":
-                        uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
                         #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvz)
-                        scores12 = mlp(vuz)
-                        scores21 = mlp(uvw)
-                        scores22 = mlp(vuw)
-                        scores1 = sigmoid(scores11 + scores12)
-                        scores2 = sigmoid(scores21 + scores22)
-                        scores = (scores1 + scores2)/2
+                        scores11 = mlp(uvzw)
+                        scores12 = mlp(uvwz)
+                        scores21 = mlp(vuzw)
+                        scores22 = mlp(vuwz)
+                        scores1 = (scores11 + scores21)/2
+                        scores2 = (scores21 + scores22)/2
+                        scores = sigmoid(scores1 + scores2)
 
                     if config["classifier"] == "mlp_bi_ntn":
                         out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
                         scores1 = mlp(out1)
                         scores2 = mlp(out2)
                         scores = 1-sigmoid(scores1 + scores2)
+                    
+                    if config["classifier"] == "cnn":           
+                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
+                   
+                        scores = sigmoid(cnn(out1))                       
 
                     if config["classifier"] == "pos_sig":
                         all_pairs = torch.mm(out, out.t())
@@ -405,24 +456,171 @@ def main():
         plt.xlabel('Threshold')
         plt.title('TPR / TNR vs Threshold')
         plt.legend()
-        plt.savefig('../results/TPR_TNT_v_threshold.png')
+        plt.savefig('../results/tpr-tnr_v_threshold.png')
+        plt.show(block=False)
         plt.close()
 
         # Choose an appropriate threshold and generate classification report on the validation set.
         idx1 = np.where(tpr <= tnr)[0]
         idx2 = np.where(tpr >= tnr)[0]
-        t = thresholds[idx1[-1]]
-        running_loss, total_loss = 0.0, 0.0
-        num_correct, num_examples = 0, 0
-        total_correct, total_examples, total_batches = 0, 0, 0
-        y_true, y_scores, y_pred = [], [], []
-        for i in range(len(datasets)):
-            num_batches = int(ceil(len(datasets[i]) / config['batch_size']))
-            total_batches += num_batches
-            # Added by Jorge
-            edge_pred, neg_pred, classes, coords = [], [], None, None
-            # --------------
-            with torch.no_grad():
+        t = config['threshold']#thresholds[idx1[-1]]
+        _thres = config['threshold']
+        for t in _thres:
+            running_loss, total_loss = 0.0, 0.0
+            num_correct, num_examples = 0, 0
+            total_correct, total_examples, total_batches = 0, 0, 0
+            y_true, y_scores, y_pred = [], [], []
+            for i in range(len(datasets)):
+                num_batches = int(ceil(len(datasets[i]) / config['batch_size']))
+                total_batches += num_batches
+                # Added by Jorge
+                edge_pred, neg_pred, classes, coords = [], [], None, None
+                # --------------
+                with torch.no_grad():
+                    for (idx, batch) in enumerate(loaders[i]):
+                        adj, features, edge_features, edges, labels, dist, triangles = batch
+                        labels = labels.to(device)
+                        
+                        # model
+                        if config["gnn_type"] == "dgnn":
+                            dist = dist.float()
+                            features, dist = features.to(device), dist.to(device)
+                            out = model(features, dist)
+
+                        if config["gnn_type"] == "egnnc":
+                            features, edge_features = features.to(device), edge_features.to(device)
+                            out = model(features, edge_features)
+
+
+                        # classify
+                        if config["classifier"] == "mlp":
+                          
+                            out1, out2 = utils.concat_node_representations_double(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = sigmoid(scores1 + scores2)
+
+                        # classify
+                        if config["classifier"] == "mlp_tri":
+                            #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                            uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                            #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                            scores11 = mlp(uvzw)
+                            scores12 = mlp(uvwz)
+                            scores21 = mlp(vuzw)
+                            scores22 = mlp(vuwz)
+                            scores1 = (scores11 + scores21)/2
+                            scores2 = (scores21 + scores22)/2
+                            scores = sigmoid(scores1 + scores2)
+
+                        if config["classifier"] == "mlp_bi_ntn":
+                            out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = 1-sigmoid(scores1 + scores2)
+
+                        if config["classifier"] == "cnn":           
+                            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
+                       
+                            scores = sigmoid(cnn(out1))                        
+
+                        if config["classifier"] == "pos_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = all_pairs[edges.T]
+                        
+                        if config["classifier"] == "neg_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = 1 - all_pairs[edges.T]
+
+                        loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
+                        #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
+
+                        running_loss += loss.item()
+                        total_loss += loss.item()
+                        predictions = (scores >= t).long()
+
+                        # added by Jorge
+                        preds = edges[torch.nonzero(predictions).detach().cpu().numpy(), :]
+                        neg_preds = edges[(predictions == 0).detach().cpu().nonzero(), :]
+                        if neg_preds.shape == (2,):
+                            neg_preds = neg_preds.reshape(1, 1, -1)
+
+                        if len(preds) > 0:
+                            for pred in preds:
+                                edge_pred.append([pred[0][0], pred[0][1]])
+                        
+                        if len(neg_preds) > 0:
+                            for pred in neg_preds:
+                                neg_pred.append([pred[0][0], pred[0][1]])
+                        # ---------------
+
+                        num_correct += torch.sum(predictions == labels.long()).item()
+                        total_correct += torch.sum(predictions == labels.long()).item()
+                        num_examples += len(labels)
+                        total_examples += len(labels)
+                        y_true.extend(labels.detach().cpu().numpy())
+                        y_scores.extend(scores.detach().cpu().numpy())
+                        y_pred.extend(predictions.detach().cpu().numpy())
+                        if (idx + 1) % stats_per_batch == 0:
+                            running_loss /= stats_per_batch
+                            accuracy = num_correct / num_examples
+                            print('    Batch {} / {}, Graph {} / {}: loss {:.4f}, accuracy {:.4f}'.format(
+                                idx+1, num_batches, i+1, len(datasets), running_loss, accuracy))
+                            if (torch.sum(labels.long() == 0).item() > 0) and (torch.sum(labels.long() == 1).item() > 0):
+                                area = roc_auc_score(labels.detach().cpu().numpy(), scores.detach().cpu().numpy())
+                                print('    ROC-AUC score: {:.4f}'.format(area))
+                            running_loss = 0.0
+                            num_correct, num_examples = 0, 0
+                    running_loss = 0.0
+                    num_correct, num_examples = 0, 0
+
+                    # export as json for visualization in IntelliGraph JORGE
+                    utils.export_prediction_as_json(datasets[i].path[0].replace("_forGraphSAGE_edges.csv", ""), 'train_val', edge_pred, neg_pred, config['results_dir'], config['model_id'])
+
+            total_loss /= total_batches
+            total_accuracy = total_correct / total_examples
+            print('Loss {:.4f}, accuracy {:.4f}'.format(total_loss, total_accuracy))
+            print('Threshold: {:.4f}, accuracy: {:.4f}'.format(t, total_correct / total_examples))
+            y_true = np.array(y_true).flatten()
+            y_scores = np.array(y_scores).flatten()
+            y_pred = np.array(y_pred).flatten()
+            report = classification_report(y_true, y_pred, digits=4)
+            area = roc_auc_score(y_true, y_scores)
+            print('ROC-AUC score: {:.4f}'.format(area))
+            print("Threshold: ", t)
+            print('Classification report\n', report)
+        print('Finished validating.')
+        print('--------------------------------')
+
+    # =================== Validation ===================
+    if config['val']:
+        criterion = utils.get_criterion(config['task'])
+        stats_per_batch = config['stats_per_batch']
+
+        t = config['threshold']
+        model.eval()
+        if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri":
+            mlp.eval()
+        if config["classifier"] == "cnn":
+            cnn.eval()
+        print('--------------------------------')
+        print('Computing ROC-AUC score for the validation dataset after training.')
+        _thres = config['threshold']
+        for t in _thres:
+            
+            running_loss, total_loss = 0.0, 0.0
+            num_correct, num_examples = 0, 0
+            total_correct, total_examples, total_batches = 0, 0, 0
+            y_true, y_scores, y_pred = [], [], []
+
+            for i in range(len(datasets)):
+                num_batches = int(ceil(len(datasets[i]) / config['batch_size']))
+                total_batches += num_batches
+                # Added by Jorge
+                edge_pred, neg_pred, classes, coords = [], [], None, None
+                # --------------
                 for (idx, batch) in enumerate(loaders[i]):
                     adj, features, edge_features, edges, labels, dist, triangles = batch
                     labels = labels.to(device)
@@ -434,35 +632,41 @@ def main():
                         out = model(features, dist)
 
                     if config["gnn_type"] == "egnnc":
-                        features, edge_features = features.to(device), edge_features.to(device)
-                        out = model(features, edge_features)
+                            features, edge_features = features.to(device), edge_features.to(device)
+                            out = model(features, edge_features)
 
 
                     # classify
                     if config["classifier"] == "mlp":
-                      
+                        
                         out1, out2 = utils.concat_node_representations_double(out, edges, device)
                         scores1 = mlp(out1)
                         scores2 = mlp(out2)
                         scores = sigmoid(scores1 + scores2)
 
-                    # classify
+                        # classify
                     if config["classifier"] == "mlp_tri":
-                        uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
                         #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvz)
-                        scores12 = mlp(vuz)
-                        scores21 = mlp(uvw)
-                        scores22 = mlp(vuw)
-                        scores1 = sigmoid(scores11 + scores12)
-                        scores2 = sigmoid(scores21 + scores22)
-                        scores = (scores1 + scores2)/2
+                        scores11 = mlp(uvzw)
+                        scores12 = mlp(uvwz)
+                        scores21 = mlp(vuzw)
+                        scores22 = mlp(vuwz)
+                        scores1 = (scores11 + scores21)/2
+                        scores2 = (scores21 + scores22)/2
+                        scores = sigmoid(scores1 + scores2)
 
                     if config["classifier"] == "mlp_bi_ntn":
                         out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
                         scores1 = mlp(out1)
                         scores2 = mlp(out2)
                         scores = 1-sigmoid(scores1 + scores2)
+                        
+                    if config["classifier"] == "cnn":
+                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)
+                        scores = sigmoid(cnn(out1))
+                        
 
                     if config["classifier"] == "pos_sig":
                         all_pairs = torch.mm(out, out.t())
@@ -475,22 +679,22 @@ def main():
                         scores = 1 - all_pairs[edges.T]
 
                     loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
-                    #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
+                    #loss = utils.get_focal_loss_criterion(scores, labels.float()) # Loss function for Focal Loss 
 
                     running_loss += loss.item()
                     total_loss += loss.item()
                     predictions = (scores >= t).long()
-
                     # added by Jorge
                     preds = edges[torch.nonzero(predictions).detach().cpu().numpy(), :]
                     neg_preds = edges[(predictions == 0).detach().cpu().nonzero(), :]
                     if neg_preds.shape == (2,):
                         neg_preds = neg_preds.reshape(1, 1, -1)
-
+                    # print(neg_preds)
+                    # print(type(neg_preds))
+                    # print(neg_preds.shape)
                     if len(preds) > 0:
                         for pred in preds:
                             edge_pred.append([pred[0][0], pred[0][1]])
-                    
                     if len(neg_preds) > 0:
                         for pred in neg_preds:
                             neg_pred.append([pred[0][0], pred[0][1]])
@@ -506,163 +710,33 @@ def main():
                     if (idx + 1) % stats_per_batch == 0:
                         running_loss /= stats_per_batch
                         accuracy = num_correct / num_examples
-                        print('    Batch {} / {}, Graph {} / {}: loss {:.4f}, accuracy {:.4f}'.format(
-                            idx+1, num_batches, i+1, len(datasets), running_loss, accuracy))
+                        print('    Batch {} / {}: loss {:.4f}, accuracy {:.4f}'.format(
+                            idx+1, num_batches, running_loss, accuracy))
                         if (torch.sum(labels.long() == 0).item() > 0) and (torch.sum(labels.long() == 1).item() > 0):
                             area = roc_auc_score(labels.detach().cpu().numpy(), scores.detach().cpu().numpy())
                             print('    ROC-AUC score: {:.4f}'.format(area))
                         running_loss = 0.0
                         num_correct, num_examples = 0, 0
+
                 running_loss = 0.0
                 num_correct, num_examples = 0, 0
 
                 # export as json for visualization in IntelliGraph JORGE
-                utils.export_prediction_as_json(datasets[i].path[0].replace("_forGraphSAGE_edges.csv", ""), 'train_val', edge_pred, neg_pred, config['results_dir'], config['model_id'])
+                utils.export_prediction_as_json(datasets[i].path[0].replace("_forGraphSAGE_edges.csv", ""), 'validation', edge_pred, neg_pred, config['results_dir'], config['model_id'])
 
-        total_loss /= total_batches
-        total_accuracy = total_correct / total_examples
-        print('Loss {:.4f}, accuracy {:.4f}'.format(total_loss, total_accuracy))
-        print('Threshold: {:.4f}, accuracy: {:.4f}'.format(t, total_correct / total_examples))
-        y_true = np.array(y_true).flatten()
-        y_scores = np.array(y_scores).flatten()
-        y_pred = np.array(y_pred).flatten()
-        report = classification_report(y_true, y_pred, digits=4)
-        area = roc_auc_score(y_true, y_scores)
-        print('ROC-AUC score: {:.4f}'.format(area))
-        print('Classification report\n', report)
-        print('Finished validating.')
-        print('--------------------------------')
-
-    # =================== Validation ===================
-    if config['val']:
-        criterion = utils.get_criterion(config['task'])
-        stats_per_batch = config['stats_per_batch']
-
-        t = config['threshold']
-        model.eval()
-        if config["classifier"] == "mlp" or config["classifier"] == "mlp_bi_ntn":
-            mlp.eval()
-        print('--------------------------------')
-        print('Computing ROC-AUC score for the validation dataset after training.')
-        running_loss, total_loss = 0.0, 0.0
-        num_correct, num_examples = 0, 0
-        total_correct, total_examples, total_batches = 0, 0, 0
-        y_true, y_scores, y_pred = [], [], []
-        for i in range(len(datasets)):
-            num_batches = int(ceil(len(datasets[i]) / config['batch_size']))
-            total_batches += num_batches
-            # Added by Jorge
-            edge_pred, neg_pred, classes, coords = [], [], None, None
-            # --------------
-            for (idx, batch) in enumerate(loaders[i]):
-                adj, features, edge_features, edges, labels, dist, triangles = batch
-                labels = labels.to(device)
-                
-                # model
-                if config["gnn_type"] == "dgnn":
-                    dist = dist.float()
-                    features, dist = features.to(device), dist.to(device)
-                    out = model(features, dist)
-
-                if config["gnn_type"] == "egnnc":
-                        features, edge_features = features.to(device), edge_features.to(device)
-                        out = model(features, edge_features)
-
-
-                # classify
-                if config["classifier"] == "mlp":
-                    
-                    out1, out2 = utils.concat_node_representations_double(out, edges, device)
-                    scores1 = mlp(out1)
-                    scores2 = mlp(out2)
-                    scores = sigmoid(scores1 + scores2)
-
-                    # classify
-                if config["classifier"] == "mlp_tri":
-                    uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                    #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                    scores11 = mlp(uvz)
-                    scores12 = mlp(vuz)
-                    scores21 = mlp(uvw)
-                    scores22 = mlp(vuw)
-                    scores1 = sigmoid(scores11 + scores12)
-                    scores2 = sigmoid(scores21 + scores22)
-                    scores = (scores1 + scores2)/2
-
-                if config["classifier"] == "mlp_bi_ntn":
-                    out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                    scores1 = mlp(out1)
-                    scores2 = mlp(out2)
-                    scores = 1-sigmoid(scores1 + scores2)
-
-                if config["classifier"] == "pos_sig":
-                    all_pairs = torch.mm(out, out.t())
-                    all_pairs = sigmoid(all_pairs)
-                    scores = all_pairs[edges.T]
-                
-                if config["classifier"] == "neg_sig":
-                    all_pairs = torch.mm(out, out.t())
-                    all_pairs = sigmoid(all_pairs)
-                    scores = 1 - all_pairs[edges.T]
-
-                loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
-                #loss = utils.get_focal_loss_criterion(scores, labels.float()) # Loss function for Focal Loss 
-
-                running_loss += loss.item()
-                total_loss += loss.item()
-                predictions = (scores >= t).long()
-                # added by Jorge
-                preds = edges[torch.nonzero(predictions).detach().cpu().numpy(), :]
-                neg_preds = edges[(predictions == 0).detach().cpu().nonzero(), :]
-                if neg_preds.shape == (2,):
-                    neg_preds = neg_preds.reshape(1, 1, -1)
-                # print(neg_preds)
-                # print(type(neg_preds))
-                # print(neg_preds.shape)
-                if len(preds) > 0:
-                    for pred in preds:
-                        edge_pred.append([pred[0][0], pred[0][1]])
-                if len(neg_preds) > 0:
-                    for pred in neg_preds:
-                        neg_pred.append([pred[0][0], pred[0][1]])
-                # ---------------
-
-                num_correct += torch.sum(predictions == labels.long()).item()
-                total_correct += torch.sum(predictions == labels.long()).item()
-                num_examples += len(labels)
-                total_examples += len(labels)
-                y_true.extend(labels.detach().cpu().numpy())
-                y_scores.extend(scores.detach().cpu().numpy())
-                y_pred.extend(predictions.detach().cpu().numpy())
-                if (idx + 1) % stats_per_batch == 0:
-                    running_loss /= stats_per_batch
-                    accuracy = num_correct / num_examples
-                    print('    Batch {} / {}: loss {:.4f}, accuracy {:.4f}'.format(
-                        idx+1, num_batches, running_loss, accuracy))
-                    if (torch.sum(labels.long() == 0).item() > 0) and (torch.sum(labels.long() == 1).item() > 0):
-                        area = roc_auc_score(labels.detach().cpu().numpy(), scores.detach().cpu().numpy())
-                        print('    ROC-AUC score: {:.4f}'.format(area))
-                    running_loss = 0.0
-                    num_correct, num_examples = 0, 0
-
-            running_loss = 0.0
-            num_correct, num_examples = 0, 0
-
-            # export as json for visualization in IntelliGraph JORGE
-            utils.export_prediction_as_json(datasets[i].path[0].replace("_forGraphSAGE_edges.csv", ""), 'validation', edge_pred, neg_pred, config['results_dir'], config['model_id'])
-
-        total_loss /= total_batches
-        total_accuracy = total_correct / total_examples
-        print('Loss {:.4f}, accuracy {:.4f}'.format(total_loss, total_accuracy))
-        y_true = np.array(y_true).flatten()
-        y_scores = np.array(y_scores).flatten()
-        y_pred = np.array(y_pred).flatten()
-        report = classification_report(y_true, y_pred, digits=4)
-        area = roc_auc_score(y_true, y_scores)
-        print('ROC-AUC score: {:.4f}'.format(area))
-        print('Classification report\n', report)
-        print('Finished Validation Set')
-        print('--------------------------------')
+            total_loss /= total_batches
+            total_accuracy = total_correct / total_examples
+            print('Loss {:.4f}, accuracy {:.4f}'.format(total_loss, total_accuracy))
+            y_true = np.array(y_true).flatten()
+            y_scores = np.array(y_scores).flatten()
+            y_pred = np.array(y_pred).flatten()
+            report = classification_report(y_true, y_pred, digits=4)
+            area = roc_auc_score(y_true, y_scores)
+            print('ROC-AUC score: {:.4f}'.format(area))
+            print("Threshold: ", t)
+            print('Classification report\n', report)
+            print('Finished Validation Set')
+            print('--------------------------------')
 
 
     # =================== Test ===================
@@ -671,128 +745,138 @@ def main():
         criterion = utils.get_criterion(config['task'])
         stats_per_batch = config['stats_per_batch']
 
-        t = config['threshold']
-        model.eval()
-        if config["classifier"] == "mlp" or config["classifier"] == "mlp_bi_ntn":
-            mlp.eval()
-        print('--------------------------------')
-        print('Computing ROC-AUC score for the test dataset after training.')
-        running_loss, total_loss = 0.0, 0.0
-        num_correct, num_examples = 0, 0
-        total_correct, total_examples, total_batches = 0, 0, 0
-        y_true, y_scores, y_pred = [], [], []
-        for i in range(len(datasets)):
-            num_batches = int(ceil(len(datasets[i]) / config['batch_size']))
-            total_batches += num_batches
-            # Added by Jorge
-            edge_pred, neg_pred = [], []
-            # --------------
+        #t = config['threshold']
+        _thres = config['threshold']
+        for t in _thres:
+            model.eval()
+            if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri":
+                mlp.eval()
+            if config["classifier"] == "cnn":
+                cnn.eval()
+            print('--------------------------------')
+            print('Computing ROC-AUC score for the test dataset after training.')
+            running_loss, total_loss = 0.0, 0.0
+            num_correct, num_examples = 0, 0
+            total_correct, total_examples, total_batches = 0, 0, 0
+            y_true, y_scores, y_pred = [], [], []
+            for i in range(len(datasets)):
+                num_batches = int(ceil(len(datasets[i]) / config['batch_size']))
+                total_batches += num_batches
+                # Added by Jorge
+                edge_pred, neg_pred = [], []
+                # --------------
 
-            for (idx, batch) in enumerate(loaders[i]):
-                adj, features, edge_features, edges, labels, dist, triangles = batch
-                labels = labels.to(device)
-                
-                # model
-                if config["gnn_type"] == "dgnn":
-                    dist = dist.float()
-                    features, dist = features.to(device), dist.to(device)
-                    out = model(features, dist)
-                
-                if config["gnn_type"] == "egnnc":
-                        features, edge_features = features.to(device), edge_features.to(device)
-                        out = model(features, edge_features)
+                for (idx, batch) in enumerate(loaders[i]):
+                    adj, features, edge_features, edges, labels, dist, triangles = batch
+                    labels = labels.to(device)
+                    
+                    # model
+                    if config["gnn_type"] == "dgnn":
+                        dist = dist.float()
+                        features, dist = features.to(device), dist.to(device)
+                        out = model(features, dist)
+                    
+                    if config["gnn_type"] == "egnnc":
+                            features, edge_features = features.to(device), edge_features.to(device)
+                            out = model(features, edge_features)
 
-
-                # classify
-                if config["classifier"] == "mlp":
-                
-                    out1, out2 = utils.concat_node_representations_double(out, edges, device)
-                    scores1 = mlp(out1)
-                    scores2 = mlp(out2)
-                    scores = sigmoid(scores1 + scores2)
 
                     # classify
-                if config["classifier"] == "mlp_tri":
-                    uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                    #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                    scores11 = mlp(uvz)
-                    scores12 = mlp(vuz)
-                    scores21 = mlp(uvw)
-                    scores22 = mlp(vuw)
-                    scores1 = sigmoid(scores11 + scores12)
-                    scores2 = sigmoid(scores21 + scores22)
-                    scores = (scores1 + scores2)/2
-
-                if config["classifier"] == "mlp_bi_ntn":
-                    out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                    scores1 = mlp(out1)
-                    scores2 = mlp(out2)
-                    scores = 1-sigmoid(scores1 + scores2)
-
-                if config["classifier"] == "pos_sig":
-                    all_pairs = torch.mm(out, out.t())
-                    all_pairs = sigmoid(all_pairs)
-                    scores = all_pairs[edges.T]
-                
-                if config["classifier"] == "neg_sig":
-                    all_pairs = torch.mm(out, out.t())
-                    all_pairs = sigmoid(all_pairs)
-                    scores = 1 - all_pairs[edges.T]
+                    if config["classifier"] == "mlp":
                     
-                loss = criterion(scores, labels.float())  # Loss function for BCE Loss 
-               
-                #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
-                running_loss += loss.item()
-                total_loss += loss.item()
-                predictions = (scores >= t).long()
+                        out1, out2 = utils.concat_node_representations_double(out, edges, device)
+                        scores1 = mlp(out1)
+                        scores2 = mlp(out2)
+                        scores = sigmoid(scores1 + scores2)
 
-                # added by Jorge
-                preds = edges[torch.nonzero(predictions).detach().cpu().numpy(), :]
-                neg_preds = edges[(predictions == 0).detach().cpu().nonzero(), :]
-                if neg_preds.shape == (2,):
-                    neg_preds = neg_preds.reshape(1, 1, -1)
+                        # classify
+                    if config["classifier"] == "mlp_tri":
+                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                        #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                        scores11 = mlp(uvzw)
+                        scores12 = mlp(uvwz)
+                        scores21 = mlp(vuzw)
+                        scores22 = mlp(vuwz)#
+                        scores1 = (scores11 + scores21)/2
+                        scores2 = (scores21 + scores22)/2
+                        scores = sigmoid(scores1 + scores2)
 
-                if len(preds) > 0:
-                    for pred in preds:
-                        edge_pred.append([pred[0][0], pred[0][1]])
+                    if config["classifier"] == "mlp_bi_ntn":
+                        out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                        scores1 = mlp(out1)
+                        scores2 = mlp(out2)
+                        scores = 1-sigmoid(scores1 + scores2)
+                        
+                    if config["classifier"] == "cnn":
+                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)
+                        scores = sigmoid(cnn(out1))                    
 
-                # ---------------
+                    if config["classifier"] == "pos_sig":
+                        all_pairs = torch.mm(out, out.t())
+                        all_pairs = sigmoid(all_pairs)
+                        scores = all_pairs[edges.T]
+                    
+                    if config["classifier"] == "neg_sig":
+                        all_pairs = torch.mm(out, out.t())
+                        all_pairs = sigmoid(all_pairs)
+                        scores = 1 - all_pairs[edges.T]
+                        
+                    loss = criterion(scores, labels.float())  # Loss function for BCE Loss 
+                   
+                    #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
+                    running_loss += loss.item()
+                    total_loss += loss.item()
+                    predictions = (scores >= t).long()
 
-                num_correct += torch.sum(predictions == labels.long()).item()
-                total_correct += torch.sum(predictions == labels.long()).item()
-                num_examples += len(labels)
-                total_examples += len(labels)
-                y_true.extend(labels.detach().cpu().numpy())
-                y_scores.extend(scores.detach().cpu().numpy())
-                y_pred.extend(predictions.detach().cpu().numpy())
-                if (idx + 1) % stats_per_batch == 0:
-                    running_loss /= stats_per_batch
-                    accuracy = num_correct / num_examples
-                    print('    Batch {} / {}: loss {:.4f}, accuracy {:.4f}'.format(
-                        idx+1, num_batches, running_loss, accuracy))
-                    if (torch.sum(labels.long() == 0).item() > 0) and (torch.sum(labels.long() == 1).item() > 0):
-                        area = roc_auc_score(labels.detach().cpu().numpy(), scores.detach().cpu().numpy())
-                        print('    ROC-AUC score: {:.4f}'.format(area))
-                    running_loss = 0.0
-                    num_correct, num_examples = 0, 0
+                    # added by Jorge
+                    preds = edges[torch.nonzero(predictions).detach().cpu().numpy(), :]
+                    neg_preds = edges[(predictions == 0).detach().cpu().nonzero(), :]
+                    if neg_preds.shape == (2,):
+                        neg_preds = neg_preds.reshape(1, 1, -1)
 
-            running_loss = 0.0
-            num_correct, num_examples = 0, 0
+                    if len(preds) > 0:
+                        for pred in preds:
+                            edge_pred.append([pred[0][0], pred[0][1]])
 
-            # export as json for visualization in IntelliGraph JORGE
-            utils.export_prediction_as_json(datasets[i].path[0].replace("_forGraphSAGE_edges.csv", ""), 'testing', edge_pred, neg_pred, config['results_dir'], config['model_id'])
+                    # ---------------
+
+                    num_correct += torch.sum(predictions == labels.long()).item()
+                    total_correct += torch.sum(predictions == labels.long()).item()
+                    num_examples += len(labels)
+                    total_examples += len(labels)
+                    y_true.extend(labels.detach().cpu().numpy())
+                    y_scores.extend(scores.detach().cpu().numpy())
+                    y_pred.extend(predictions.detach().cpu().numpy())
+                    if (idx + 1) % stats_per_batch == 0:
+                        running_loss /= stats_per_batch
+                        accuracy = num_correct / num_examples
+                        print('    Batch {} / {}: loss {:.4f}, accuracy {:.4f}'.format(
+                            idx+1, num_batches, running_loss, accuracy))
+                        if (torch.sum(labels.long() == 0).item() > 0) and (torch.sum(labels.long() == 1).item() > 0):
+                            area = roc_auc_score(labels.detach().cpu().numpy(), scores.detach().cpu().numpy())
+                            print('    ROC-AUC score: {:.4f}'.format(area))
+                        running_loss = 0.0
+                        num_correct, num_examples = 0, 0
+
+                running_loss = 0.0
+                num_correct, num_examples = 0, 0
+
+                # export as json for visualization in IntelliGraph JORGE
+                utils.export_prediction_as_json(datasets[i].path[0].replace("_forGraphSAGE_edges.csv", ""), 'testing', edge_pred, neg_pred, config['results_dir'], config['model_id'])
 
 
-        total_loss /= total_batches
-        total_accuracy = total_correct / total_examples
-        print('Loss {:.4f}, accuracy {:.4f}'.format(total_loss, total_accuracy))
-        y_true = np.array(y_true).flatten()
-        y_scores = np.array(y_scores).flatten()
-        y_pred = np.array(y_pred).flatten()
-        report = classification_report(y_true, y_pred, digits=4)
-        area = roc_auc_score(y_true, y_scores)
-        print('ROC-AUC score: {:.4f}'.format(area))
-        print('Classification report\n', report)
+            total_loss /= total_batches
+            total_accuracy = total_correct / total_examples
+            print('Loss {:.4f}, accuracy {:.4f}'.format(total_loss, total_accuracy))
+            y_true = np.array(y_true).flatten()
+            y_scores = np.array(y_scores).flatten()
+            y_pred = np.array(y_pred).flatten()
+            report = classification_report(y_true, y_pred, digits=4)
+            area = roc_auc_score(y_true, y_scores)
+            print('ROC-AUC score: {:.4f}'.format(area))
+            print("Threshold: ", t)
+            print('Classification report\n', report)
         print('Finished testing.')
         print('--------------------------------')
 
