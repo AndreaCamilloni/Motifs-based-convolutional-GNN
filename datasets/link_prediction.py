@@ -8,6 +8,11 @@ pd.options.mode.chained_assignment = None  # default='warn'
 import scipy.sparse as sp
 import torch
 from torch.utils.data import Dataset
+from torchvision import models
+import torch.nn as nn
+
+from PIL import Image
+
 
 import networkx as nx
 from itertools import combinations
@@ -906,7 +911,8 @@ def find_triangles_by_edge(nodes_df, edges_df, DROP_EDGES=False):
             triangles.add(t2)
 
 
-        elif len(vertices) == 0:
+        """elif len(vertices) == 0:
+            
             print("-------------ERROR--------------------")
             # This shpuldn't happen - SKIPP this part for now, i just kept this code for later 
             t1, t2, t3 = frozenset((u,v,vertices[0])), frozenset((u,v,vertices[1])), frozenset((u,v,vertices[2]))
@@ -926,10 +932,91 @@ def find_triangles_by_edge(nodes_df, edges_df, DROP_EDGES=False):
             triangles.add(list(tmp)[0])
             triangles.add(list(tmp)[1])
 
-            triangles_dict[frozenset((u,v))] = vertices            
+            triangles_dict[frozenset((u,v))] = vertices    """        
 
     
     return triangles, triangles_dict, edges_df
+
+
+def extract_features(xc, yc, patch_size, image, model):
+    if xc-patch_size//2 < 0:
+        xc = patch_size//2
+    if yc-patch_size//2 < 0:
+        yc = patch_size//2
+    if xc+patch_size//2 > image.shape[0]:
+        xc = image.shape[0] - patch_size//2
+    if yc+patch_size//2 > image.shape[1]:
+        yc = image.shape[1] - patch_size//2
+
+    # Extract the patch from the image
+    patch = image[xc-patch_size//2:xc+patch_size//2, yc-patch_size//2:yc+patch_size//2, :]
+    # Convert the patch to a tensor
+    patch_tensor = torch.from_numpy(patch).permute(2, 0, 1).float()
+    #patch_tensor = torch.FloatTensor(patch.transpose(2, 0, 1))[None, :]
+    # Normalize the patch
+    patch_tensor = patch_tensor / 255.0
+    # Add a dimension to the tensor to represent the batch
+    patch_tensor = patch_tensor.unsqueeze(0)
+    # Extract the features of the patch using the pretrained model
+    features = model(patch_tensor)
+    # Remove the batch dimension
+    features = features.squeeze(0)
+    # Convert the features to a numpy array
+    features = features.detach().numpy()
+    return features
+
+def extract_edge_features(x1, y1, x2, y2, image, model):
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+    # if the patch is smaller than 32x32 then extend it where it is possible
+    if x2-x1 < 32:
+        x1 = x1 - (32 - (x2-x1))//2
+        x2 = x2 + (32 - (x2-x1))//2
+    if y2-y1 < 32:
+        y1 = y1 - (32 - (y2-y1))//2
+        y2 = y2 + (32 - (y2-y1))//2
+
+    # if the patch is outside the image, then move it inside
+    if x1 < 0:
+        x1 = 0
+        x2 = 32
+    if y1 < 0:
+        y1 = 0
+        y2 = 32
+    if x2 > image.shape[0]:
+        x2 = image.shape[0]
+        x1 = x2 - 32
+    if y2 > image.shape[1]:
+        y2 = image.shape[1]
+        y1 = y2 - 32
+        
+    # Extract the patch from the image
+    patch = image[x1:x2, y1:y2, :]
+    # Convert the patch to a tensor
+    patch_tensor = torch.from_numpy(patch).permute(2, 0, 1).float()
+    #patch_tensor = torch.FloatTensor(patch.transpose(2, 0, 1))[None, :]
+    # Normalize the patch
+    patch_tensor = patch_tensor / 255.0
+    # Add a dimension to the tensor to represent the batch
+    patch_tensor = patch_tensor.unsqueeze(0)
+    # Extract the features of the patch using the pretrained model
+    features = model(patch_tensor)
+    # Remove the batch dimension
+    features = features.squeeze(0)
+    # Convert the features to a numpy array
+    features = features.detach().numpy()
+
+    
+    return features
+
+
+# APPEARANCE FEATURES extraction with pretrained model
+ADD_NODE_FEATURES = True
+ADD_EDGE_FEATURES = False #Result in out of memory error
+# Triangles Structure Extraction
+TRIANGLES_ext = True
 
 class KIGraphDatasetSUBGCN(Dataset):
 
@@ -962,11 +1049,30 @@ class KIGraphDatasetSUBGCN(Dataset):
         # Cells, distance_close_to_edges
         edge_path = path[1]
         node_path = path[2]
+    
 
         # with glob
-        edges_df = pd.read_csv(edge_path)
+        edges = pd.read_csv(edge_path)
         nodes = pd.read_csv(node_path)
-        self.triangles, self.triangles_dict, edges = find_triangles_by_edge(nodes, edges_df)
+
+
+        if TRIANGLES_ext:
+            self.triangles, self.triangles_dict, edges = find_triangles_by_edge(nodes, edges)
+        else:
+            self.triangles = set()
+            self.triangles_dict = dict()
+
+        ## TODO: ADD a condintion to check if the node features are required or not
+        if ADD_NODE_FEATURES or ADD_EDGE_FEATURES:
+            image_path = 'datasets\\images\\' + path[0].split('\\')[1] + '.tif'
+            image = Image.open(image_path)
+            image = image.convert('RGB')
+            image = np.array(image)
+            self.image = image[:, :, 0:3]
+            
+            self.model = models.resnet18(weights='ResNet18_Weights.DEFAULT')
+            self.model.fc = nn.Identity()
+            self.model.eval()
 
         if add_self_edges:
             for i in range(len(nodes)):
@@ -1045,8 +1151,31 @@ class KIGraphDatasetSUBGCN(Dataset):
         #print('Edge_distance Shape : ' + str(distances_close_to_edges.shape))
         #print('Neighborhood Similarity Shape : ' + str(neighborhood_similarity_edges.shape))
 
+        if ADD_EDGE_FEATURES:
+            edges['app_features'] = None
 
-        edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges), axis=0)
+            # create sparse tensor of size col_row_len x col_row_len x 512
+            edges_app_features = torch.zeros((col_row_len, col_row_len, 512))
+
+            for _, row in edges.iterrows():
+                x1, y1 = nodes.loc[nodes['id'] == row['source']]['x'], nodes.loc[nodes['id'] == row['source']]['y']
+                x2, y2 = nodes.loc[nodes['id'] == row['target']]['x'], nodes.loc[nodes['id'] == row['target']]['y']
+                features = extract_edge_features(int(x1), int(y1), int(x2), int(y2), self.image, self.model)
+                edges.at[_, 'app_features'] = features
+
+                features = torch.from_numpy(features)
+                source = row['source']
+                target = row['target']
+                
+                edges_app_features[source][target] = features
+                edges_app_features[target][source] = features
+ 
+            
+            edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges, edges_app_features.permute(2, 0, 1)), axis=0)
+        
+        else:
+            edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges), axis=0)
+        
         #edge_features = delta_entropy_edges
         #print(edge_features)
         # self.edge_features = utils.normalize_edge_feature_doubly_stochastic(edge_features) ### not to be used
@@ -1151,10 +1280,27 @@ class KIGraphDatasetSUBGCN(Dataset):
         #graph_node_features = np.concatenate((cell_types_scores, cell_density[:,None], cell_entropy[:,None]), axis=1 )  ### Concatenate all features 
         #self.features = torch.from_numpy(graph_node_features).float()  # Cell features 
 
-        ###### Code to add node features ends here ##### 
 
-        ### Use this self feature if only one-hot embedding is required as node feature set
-        self.features = torch.from_numpy(cell_types_scores).float()  # Cell features with just one-hot encoding 
+
+        
+        if ADD_NODE_FEATURES:
+            nodes['app_features'] = None
+            # For each node, extract the features from the image
+            for _, row in nodes.iterrows():
+                xc, yc = row['x'], row['y']
+                features_resnet = extract_features(int(xc), int(yc), 256, self.image, self.model)
+                nodes.at[_, 'app_features'] = features_resnet
+
+            cell_app_features = nodes['app_features'].to_numpy()
+            cell_app_features = np.array(cell_app_features)
+    
+
+            graph_node_features = np.concatenate((cell_types_scores,  np.stack(cell_app_features, axis=0).astype(np.float64)), axis=1 )  ### Concatenate all features 
+            self.features = torch.from_numpy(graph_node_features).float()  # Cell features 
+        ###### Code to add node features ends here ##### 
+        else:
+            ### Use this self feature if only one-hot embedding is required as node feature set
+            self.features = torch.from_numpy(cell_types_scores).float()  # Cell features with just one-hot encoding 
 
         print('self.features.shape:', self.features.shape)
         # [2] end
