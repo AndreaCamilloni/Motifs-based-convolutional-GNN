@@ -1012,10 +1012,9 @@ def extract_edge_features(x1, y1, x2, y2, image, model):
     return features
 
 
-# APPEARANCE FEATURES extraction with pretrained model
-ADD_NODE_FEATURES = True
+
+ADD_NODE_FEATURES = False
 ADD_EDGE_FEATURES = False #Result in out of memory error
-# Triangles Structure Extraction
 TRIANGLES_ext = True
 
 class KIGraphDatasetSUBGCN(Dataset):
@@ -1152,26 +1151,30 @@ class KIGraphDatasetSUBGCN(Dataset):
         #print('Neighborhood Similarity Shape : ' + str(neighborhood_similarity_edges.shape))
 
         if ADD_EDGE_FEATURES:
-            edges['app_features'] = None
+            edges['morph_features'] = None
 
             # create sparse tensor of size col_row_len x col_row_len x 512
-            edges_app_features = torch.zeros((col_row_len, col_row_len, 512))
+            morph_features = torch.zeros((col_row_len, col_row_len, 512))
 
             for _, row in edges.iterrows():
                 x1, y1 = nodes.loc[nodes['id'] == row['source']]['x'], nodes.loc[nodes['id'] == row['source']]['y']
                 x2, y2 = nodes.loc[nodes['id'] == row['target']]['x'], nodes.loc[nodes['id'] == row['target']]['y']
                 features = extract_edge_features(int(x1), int(y1), int(x2), int(y2), self.image, self.model)
-                edges.at[_, 'app_features'] = features
+                edges.at[_, 'morph_features'] = features
 
                 features = torch.from_numpy(features)
                 source = row['source']
                 target = row['target']
                 
-                edges_app_features[source][target] = features
-                edges_app_features[target][source] = features
- 
+                morph_features[source][target] = features
+                morph_features[target][source] = features
+
+            #edge_morph_features = edges['morph_features'].to_numpy()
+            #edge_morph_features = np.array(edge_morph_features)
+
+
             
-            edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges, edges_app_features.permute(2, 0, 1)), axis=0)
+            edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges, morph_features.permute(2, 0, 1)), axis=0)
         
         else:
             edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges), axis=0)
@@ -1284,18 +1287,18 @@ class KIGraphDatasetSUBGCN(Dataset):
 
         
         if ADD_NODE_FEATURES:
-            nodes['app_features'] = None
+            nodes['morph_features'] = None
             # For each node, extract the features from the image
             for _, row in nodes.iterrows():
                 xc, yc = row['x'], row['y']
                 features_resnet = extract_features(int(xc), int(yc), 256, self.image, self.model)
-                nodes.at[_, 'app_features'] = features_resnet
+                nodes.at[_, 'morph_features'] = features_resnet
 
-            cell_app_features = nodes['app_features'].to_numpy()
-            cell_app_features = np.array(cell_app_features)
+            cell_morph_features = nodes['morph_features'].to_numpy()
+            cell_morph_features = np.array(cell_morph_features)
     
 
-            graph_node_features = np.concatenate((cell_types_scores,  np.stack(cell_app_features, axis=0).astype(np.float64)), axis=1 )  ### Concatenate all features 
+            graph_node_features = np.concatenate((cell_types_scores,  np.stack(cell_morph_features, axis=0).astype(np.float64)), axis=1 )  ### Concatenate all features 
             self.features = torch.from_numpy(graph_node_features).float()  # Cell features 
         ###### Code to add node features ends here ##### 
         else:

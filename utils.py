@@ -318,6 +318,7 @@ def get_fname(config):
     fname : str
         The filename for the saved model.
     """
+    
     model = config['model']
     agg_class = config['agg_class']
     hidden_dims_str = '_'.join([str(x) for x in config['hidden_dims']])
@@ -326,7 +327,10 @@ def get_fname(config):
     epochs = config['epochs']
     lr = config['lr']
     weight_decay = config['weight_decay']
-    fname = f"{model}.pth"
+    if config["combined_model"]:
+        fname = f"{model}.pth"
+    else:
+        fname = f"{model}.pth"
 
     return fname
 
@@ -699,6 +703,41 @@ def create_TriangularMotifsCNN_input_uv(features, edges, triangles, device="cpu"
 
     return input_data
     
+def create_TriangularMotifsCNN_input_old(features, edges, triangles, device="cpu"):
+ 
+    uvz = torch.FloatTensor().to(device)
+    uvw = torch.FloatTensor().to(device)
+    vuz = torch.FloatTensor().to(device)
+    vuw = torch.FloatTensor().to(device)
+     
+    
+    count = 0
+    for u, v in edges:
+        
+        t12 = triangles.get(frozenset((u,v)))
+        #print("Triangles: ", t12)
+        #print("Edge: ", (u,v))
+        if not t12 is None:
+            z, w = t12[0], t12[1]
+        else:
+            #print("------ Padding ------")
+            print("Edge: ", (u,v))
+            count += 1
+            z, w = u, v
+        z,w = int(z), int(w)
+        uvz = torch.cat((uvz, torch.cat((features[u], features[v], features[z])).reshape(1, -1)), dim=0)
+        uvw = torch.cat((uvw, torch.cat((features[u], features[v], features[w])).reshape(1, -1)), dim=0)
+        vuz = torch.cat((vuz, torch.cat((features[v], features[u], features[z])).reshape(1, -1)), dim=0)
+        vuw = torch.cat((vuw, torch.cat((features[v], features[u], features[w])).reshape(1, -1)), dim=0)
+         
+     
+    #print("uvz.shape: ", uvz.shape)
+    input_data = torch.stack([uvz, uvw, vuz, vuw], dim=1)   
+    #print("input_data.shape: ", input_data.shape)
+    input_data = input_data.view(-1, 4*3, 8, 8) 
+    #print("input_data.shape: ", input_data.shape)
+
+    return input_data
 
 def concat_node_representations_double_triangle_tmp(features, edges, triangles, device="cpu"):
   
@@ -796,7 +835,7 @@ def parse_args():
     parser.add_argument('--num_samples', type=int, default=-1,
                         help='number of neighbors to sample, default=-1')
     parser.add_argument('--classifier', type=str,
-                        choices=['pos_sig', 'neg_sig', 'mlp'],
+                        choices=['pos_sig', 'neg_sig', 'mlp', 'cnn'],
                         default='mlp',
                         help='classifier type, default: mlp')
     parser.add_argument('--model_id', type=str,

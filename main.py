@@ -65,10 +65,12 @@ def main():
         channel_dim = datasets[0].get_channel()
         model = EGNNC(input_dim, hidden_dim, output_dim,
                     channel_dim, config['dropout'], config['device'])
+        
+    
     model.to(config['device'])
 
     if config["classifier"] == "mlp":
-        mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*2, hidden_dim=output_dim*2, output_dim=1, dropout=0.5)
+        mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*2, hidden_dim=output_dim*2, output_dim=1, dropout=0.5, activation = config['activation_fc'])
         mlp.to(config["device"])
 
     if config["classifier"] == "mlp_tri":
@@ -81,35 +83,42 @@ def main():
         mlp.to(config["device"])             
 
     if config["classifier"] == "cnn":
-        cnn = models.TriangularMotifsCNN(num_channels = 4, input_size=channel_dim*output_dim)
+        cnn = models.TriangularMotifsCNN(num_channels = 4)
         cnn.to(config["device"])
+    
+    if config["combined_model"]:
+        classifier = mlp if config["classifier"] == "mlp" else cnn
+        combined_model = models.CombinedModel(model, classifier, config["classifier"], config["device"])
+        combined_model.to(config["device"])
 
 
     if config['val'] or config['test']:
         directory = config['saved_models_dir']
         fname = utils.get_fname(config)
         path = os.path.join(directory, fname)
-        model.load_state_dict(torch.load(path, map_location=torch.device(device)))
+        if config["combined_model"]:
+            combined_model.load_state_dict(torch.load(path, map_location=torch.device(device)))
+        else:
 
-        if config["classifier"] == "mlp":
-            fnamemlp = 'mlp' + fname
-            pathmlp = os.path.join(directory, fnamemlp)
-            mlp.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
+            if config["classifier"] == "mlp":
+                fnamemlp = 'mlp' + fname
+                pathmlp = os.path.join(directory, fnamemlp)
+                mlp.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
 
-        if config["classifier"] == "mlp_tri":
-            fnamemlp = 'mlp_tri' + fname
-            pathmlp = os.path.join(directory, fnamemlp)
-            mlp.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
+            if config["classifier"] == "mlp_tri":
+                fnamemlp = 'mlp_tri' + fname
+                pathmlp = os.path.join(directory, fnamemlp)
+                mlp.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
 
-        if config["classifier"] == "mlp_bi_ntn":
-            fnamemlp = 'mlp_bi_ntn' + fname
-            pathmlp = os.path.join(directory, fnamemlp)
-            mlp.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
-            
-        if config["classifier"] == "cnn":
-            fnamemlp = 'cnn' + fname
-            pathmlp = os.path.join(directory, fnamemlp)
-            cnn.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
+            if config["classifier"] == "mlp_bi_ntn":
+                fnamemlp = 'mlp_bi_ntn' + fname
+                pathmlp = os.path.join(directory, fnamemlp)
+                mlp.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
+                
+            if config["classifier"] == "cnn":
+                fnamemlp = 'cnn' + fname
+                pathmlp = os.path.join(directory, fnamemlp)
+                cnn.load_state_dict(torch.load(pathmlp, map_location=torch.device(device)))
 
     print(model)
 
@@ -132,60 +141,64 @@ def main():
                     adj, features, edge_features, edges, labels, dist, triangles = batch
                     labels = labels.to(device)
 
-                    # model
-                    if config["gnn_type"] == "dgnn":
-                        dist = dist.float()
-                        features, dist = features.to(device), dist.to(device)
-                        out = model(features, dist)
-
-                    if config["gnn_type"] == "egnnc":
+                    if config['combined_model']:
                         features, edge_features = features.to(device), edge_features.to(device)
-                        out = model(features, edge_features)
+                        scores = combined_model(features, edge_features, edges, triangles)
+                    else:
+                        # model
+                        if config["gnn_type"] == "dgnn":
+                            dist = dist.float()
+                            features, dist = features.to(device), dist.to(device)
+                            out = model(features, dist)
+
+                        if config["gnn_type"] == "egnnc":
+                            features, edge_features = features.to(device), edge_features.to(device)
+                            out = model(features, edge_features)
 
 
-                    # classify
-                    if config["classifier"] == "mlp":
-                        
-                        out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = sigmoid(scores1 + scores2)
+                        # classify
+                        if config["classifier"] == "mlp":
+                            
+                            out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = sigmoid(scores1 + scores2)
 
-                    # classify
-                    if config["classifier"] == "mlp_tri":
-                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
-                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                        #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvzw)
-                        scores12 = mlp(uvwz)
-                        scores21 = mlp(vuzw)
-                        scores22 = mlp(vuwz)
-                        scores1 = (scores11 + scores21)/2
-                        scores2 = (scores21 + scores22)/2
-                        scores = sigmoid(scores1 + scores2)
+                        # classify
+                        if config["classifier"] == "mlp_tri":
+                            #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                            uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                            #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                            scores11 = mlp(uvzw)
+                            scores12 = mlp(uvwz)
+                            scores21 = mlp(vuzw)
+                            scores22 = mlp(vuwz)
+                            scores1 = (scores11 + scores21)/2
+                            scores2 = (scores21 + scores22)/2
+                            scores = sigmoid(scores1 + scores2)
 
 
-                    if config["classifier"] == "mlp_bi_ntn":
-                        out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = 1-sigmoid(scores1 + scores2)
+                        if config["classifier"] == "mlp_bi_ntn":
+                            out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = 1-sigmoid(scores1 + scores2)
 
-                    if config["classifier"] == "cnn":           
-                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
-                   
-                        scores = sigmoid(cnn(out1))
- 
-
-                    if config["classifier"] == "pos_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = all_pairs[edges.T]
+                        if config["classifier"] == "cnn":           
+                            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
                     
-                    if config["classifier"] == "neg_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = 1 - all_pairs[edges.T]
+                            scores = sigmoid(cnn(out1))
+    
+
+                        if config["classifier"] == "pos_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = all_pairs[edges.T]
+                        
+                        if config["classifier"] == "neg_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = 1 - all_pairs[edges.T]
 
                     y_true.extend(labels.detach().cpu().numpy())
                     y_scores.extend(scores.detach().cpu().numpy())
@@ -199,17 +212,24 @@ def main():
 
     # Train.
     if not config['val'] and not config['test']:
-        optimizer = optim.Adam(model.parameters(), lr=config['lr'],
-                            weight_decay=config['weight_decay'])
+        if config['combined_model']:
+            optimizer = optim.Adam(combined_model.parameters(), lr=config['lr'],
+                                weight_decay=config['weight_decay'])
+        else:
+            optimizer = optim.Adam(model.parameters(), lr=config['lr'],
+                                weight_decay=config['weight_decay'])
         epochs = config['epochs']
 
         #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1500, gamma=0.8)
         scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[5, 10, 15, 20, 25], gamma=0.5) # Epoch decay
-        model.train()
-        if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri" :
-            mlp.train()
-        if config["classifier"] == "cnn":
-            cnn.train()
+        if config['combined_model']:
+            combined_model.train()
+        else:
+            model.train()
+            if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri" :
+                mlp.train()
+            if config["classifier"] == "cnn":
+                cnn.train()
         print('--------------------------------')
         print('Training.')
         loss_vals = []
@@ -231,57 +251,61 @@ def main():
                     adj, features, edge_features, edges, labels, dist, triangles = batch
                     labels = labels.to(device)
                     optimizer.zero_grad()
-
-                    # model
-                    if config["gnn_type"] == "dgnn":
-                        dist = dist.float()
-                        features, dist = features.to(device), dist.to(device)
-                        out = model(features, dist)
-
-                    if config["gnn_type"] == "egnnc":
+                    if config['combined_model']:
                         features, edge_features = features.to(device), edge_features.to(device)
-                        out = model(features, edge_features)
+                        scores = combined_model(features, edge_features, edges, triangles)
+                    else:
 
-                    # classify
-                    if config["classifier"] == "mlp":
-                        out1, out2 = utils.concat_node_representations_double(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = sigmoid(scores1 + scores2)
+                        # model
+                        if config["gnn_type"] == "dgnn":
+                            dist = dist.float()
+                            features, dist = features.to(device), dist.to(device)
+                            out = model(features, dist)
 
-                    # classify
-                    if config["classifier"] == "mlp_tri":
-                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
-                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                        #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvzw)
-                        scores12 = mlp(uvwz)
-                        scores21 = mlp(vuzw)
-                        scores22 = mlp(vuwz)
-                        scores1 = (scores11 + scores21)/2
-                        scores2 = (scores21 + scores22)/2
-                        scores = sigmoid(scores1 + scores2)
+                        if config["gnn_type"] == "egnnc":
+                            features, edge_features = features.to(device), edge_features.to(device)
+                            out = model(features, edge_features)
 
-                    if config["classifier"] == "mlp_bi_ntn":
-                        out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = 1-sigmoid(scores1 + scores2)
+                        # classify
+                        if config["classifier"] == "mlp":
+                            out1, out2 = utils.concat_node_representations_double(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = sigmoid(scores1 + scores2)
+
+                        # classify
+                        if config["classifier"] == "mlp_tri":
+                            #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                            uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                            #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                            scores11 = mlp(uvzw)
+                            scores12 = mlp(uvwz)
+                            scores21 = mlp(vuzw)
+                            scores22 = mlp(vuwz)
+                            scores1 = (scores11 + scores21)/2
+                            scores2 = (scores21 + scores22)/2
+                            scores = sigmoid(scores1 + scores2)
+
+                        if config["classifier"] == "mlp_bi_ntn":
+                            out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = 1-sigmoid(scores1 + scores2)
+                        
+                        if config["classifier"] == "cnn":           
+                            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
                     
-                    if config["classifier"] == "cnn":           
-                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
-                   
-                        scores = sigmoid(cnn(out1))                
+                            scores = sigmoid(cnn(out1))                
 
-                    if config["classifier"] == "pos_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = all_pairs[edges.T]
-                    
-                    if config["classifier"] == "neg_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = 1 - all_pairs[edges.T]
+                        if config["classifier"] == "pos_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = all_pairs[edges.T]
+                        
+                        if config["classifier"] == "neg_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = 1 - all_pairs[edges.T]
 
                     loss = criterion(scores, labels.float()) # Loss function for BCE loss
                     #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
@@ -331,34 +355,40 @@ def main():
             fname = utils.get_fname(config)
             path = os.path.join(directory, fname)
             print('Saving model at {}'.format(path))
-            torch.save(model.state_dict(), path)
-            if config["classifier"] == "mlp":
-                fnamemlp = 'mlp' + fname
-                pathmlp = os.path.join(directory, fnamemlp)
-                torch.save(mlp.state_dict(), pathmlp)
-            print('Finished saving model.')
-            print('--------------------------------')
+            if config['combined_model']:
+                torch.save(combined_model.state_dict(), path)
+            else:
+                
+                torch.save(model.state_dict(), path)
 
-            if config["classifier"] == "mlp_tri":
-                fnamemlp = 'mlp_tri' + fname
-                pathmlp = os.path.join(directory, fnamemlp)
-                torch.save(mlp.state_dict(), pathmlp)
-            print('Finished saving model.')
-            print('--------------------------------')
 
-            if config["classifier"] == "mlp_bi_ntn":
-                fnamemlp = 'mlp_bi_ntn' + fname
-                pathmlp = os.path.join(directory, fnamemlp)
-                torch.save(mlp.state_dict(), pathmlp)
-            print('Finished saving model.')
-            print('--------------------------------')
-         
-            if config["classifier"] == "cnn":
-                fnamemlp = 'cnn' + fname
-                pathmlp = os.path.join(directory, fnamemlp)
-                torch.save(cnn.state_dict(), pathmlp)
-            print('Finished saving model.')
-            print('--------------------------------')
+                if config["classifier"] == "mlp":
+                    fnamemlp = 'mlp' + fname
+                    pathmlp = os.path.join(directory, fnamemlp)
+                    torch.save(mlp.state_dict(), pathmlp)
+                print('Finished saving model.')
+                print('--------------------------------')
+
+                if config["classifier"] == "mlp_tri":
+                    fnamemlp = 'mlp_tri' + fname
+                    pathmlp = os.path.join(directory, fnamemlp)
+                    torch.save(mlp.state_dict(), pathmlp)
+                print('Finished saving model.')
+                print('--------------------------------')
+
+                if config["classifier"] == "mlp_bi_ntn":
+                    fnamemlp = 'mlp_bi_ntn' + fname
+                    pathmlp = os.path.join(directory, fnamemlp)
+                    torch.save(mlp.state_dict(), pathmlp)
+                print('Finished saving model.')
+                print('--------------------------------')
+            
+                if config["classifier"] == "cnn":
+                    fnamemlp = 'cnn' + fname
+                    pathmlp = os.path.join(directory, fnamemlp)
+                    torch.save(cnn.state_dict(), pathmlp)
+                print('Finished saving model.')
+                print('--------------------------------')
 
     # Compute ROC-AUC score on validation set after training.
     if not config['val'] and not config['test']:
@@ -381,58 +411,62 @@ def main():
                     adj, features, edge_features, edges, labels, dist, triangles = batch
                     labels = labels.to(device)
                     
-                    # model
-                    if config["gnn_type"] == "dgnn":
-                        dist = dist.float()
-                        features, dist = features.to(device), dist.to(device)
-                        out = model(features, dist)
- 
-                    if config["gnn_type"] == "egnnc":
+                    if config["combined_model"]:    
                         features, edge_features = features.to(device), edge_features.to(device)
-                        out = model(features, edge_features)
+                        scores = combined_model(features, edge_features, edges, triangles)
+                    else:
+                        # model
+                        if config["gnn_type"] == "dgnn":
+                            dist = dist.float()
+                            features, dist = features.to(device), dist.to(device)
+                            out = model(features, dist)
+    
+                        if config["gnn_type"] == "egnnc":
+                            features, edge_features = features.to(device), edge_features.to(device)
+                            out = model(features, edge_features)
 
 
-                    # classify
-                    if config["classifier"] == "mlp":
+                        # classify
+                        if config["classifier"] == "mlp":
+                        
+                            out1, out2 = utils.concat_node_representations_double(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = sigmoid(scores1 + scores2)
+
+                        # classify
+                        if config["classifier"] == "mlp_tri":
+                            #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                            uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                            #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                            scores11 = mlp(uvzw)
+                            scores12 = mlp(uvwz)
+                            scores21 = mlp(vuzw)
+                            scores22 = mlp(vuwz)
+                            scores1 = (scores11 + scores21)/2
+                            scores2 = (scores21 + scores22)/2
+                            scores = sigmoid(scores1 + scores2)
+
+                        if config["classifier"] == "mlp_bi_ntn":
+                            out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = 1-sigmoid(scores1 + scores2)
+                        
+                        if config["classifier"] == "cnn":           
+                            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
                     
-                        out1, out2 = utils.concat_node_representations_double(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = sigmoid(scores1 + scores2)
+                            scores = sigmoid(cnn(out1))                       
 
-                    # classify
-                    if config["classifier"] == "mlp_tri":
-                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
-                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                        #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvzw)
-                        scores12 = mlp(uvwz)
-                        scores21 = mlp(vuzw)
-                        scores22 = mlp(vuwz)
-                        scores1 = (scores11 + scores21)/2
-                        scores2 = (scores21 + scores22)/2
-                        scores = sigmoid(scores1 + scores2)
-
-                    if config["classifier"] == "mlp_bi_ntn":
-                        out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = 1-sigmoid(scores1 + scores2)
-                    
-                    if config["classifier"] == "cnn":           
-                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
-                   
-                        scores = sigmoid(cnn(out1))                       
-
-                    if config["classifier"] == "pos_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = all_pairs[edges.T]
-                    
-                    if config["classifier"] == "neg_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = 1 - all_pairs[edges.T]
+                        if config["classifier"] == "pos_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = all_pairs[edges.T]
+                        
+                        if config["classifier"] == "neg_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = 1 - all_pairs[edges.T]
 
                     y_true.extend(labels.detach().cpu().numpy())
                     y_scores.extend(scores.detach().cpu().numpy())
@@ -481,58 +515,62 @@ def main():
                         adj, features, edge_features, edges, labels, dist, triangles = batch
                         labels = labels.to(device)
                         
-                        # model
-                        if config["gnn_type"] == "dgnn":
-                            dist = dist.float()
-                            features, dist = features.to(device), dist.to(device)
-                            out = model(features, dist)
-
-                        if config["gnn_type"] == "egnnc":
+                        if config["combined_model"]:
                             features, edge_features = features.to(device), edge_features.to(device)
-                            out = model(features, edge_features)
+                            scores = combined_model(features, edge_features, edges, triangles)
+                        else:
+                            # model
+                            if config["gnn_type"] == "dgnn":
+                                dist = dist.float()
+                                features, dist = features.to(device), dist.to(device)
+                                out = model(features, dist)
+
+                            if config["gnn_type"] == "egnnc":
+                                features, edge_features = features.to(device), edge_features.to(device)
+                                out = model(features, edge_features)
 
 
-                        # classify
-                        if config["classifier"] == "mlp":
-                          
-                            out1, out2 = utils.concat_node_representations_double(out, edges, device)
-                            scores1 = mlp(out1)
-                            scores2 = mlp(out2)
-                            scores = sigmoid(scores1 + scores2)
+                            # classify
+                            if config["classifier"] == "mlp":
+                            
+                                out1, out2 = utils.concat_node_representations_double(out, edges, device)
+                                scores1 = mlp(out1)
+                                scores2 = mlp(out2)
+                                scores = sigmoid(scores1 + scores2)
 
-                        # classify
-                        if config["classifier"] == "mlp_tri":
-                            #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
-                            uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                            #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                            scores11 = mlp(uvzw)
-                            scores12 = mlp(uvwz)
-                            scores21 = mlp(vuzw)
-                            scores22 = mlp(vuwz)
-                            scores1 = (scores11 + scores21)/2
-                            scores2 = (scores21 + scores22)/2
-                            scores = sigmoid(scores1 + scores2)
+                            # classify
+                            if config["classifier"] == "mlp_tri":
+                                #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                                uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                                #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                                scores11 = mlp(uvzw)
+                                scores12 = mlp(uvwz)
+                                scores21 = mlp(vuzw)
+                                scores22 = mlp(vuwz)
+                                scores1 = (scores11 + scores21)/2
+                                scores2 = (scores21 + scores22)/2
+                                scores = sigmoid(scores1 + scores2)
 
-                        if config["classifier"] == "mlp_bi_ntn":
-                            out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                            scores1 = mlp(out1)
-                            scores2 = mlp(out2)
-                            scores = 1-sigmoid(scores1 + scores2)
+                            if config["classifier"] == "mlp_bi_ntn":
+                                out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                                scores1 = mlp(out1)
+                                scores2 = mlp(out2)
+                                scores = 1-sigmoid(scores1 + scores2)
 
-                        if config["classifier"] == "cnn":           
-                            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
-                       
-                            scores = sigmoid(cnn(out1))                        
-
-                        if config["classifier"] == "pos_sig":
-                            all_pairs = torch.mm(out, out.t())
-                            all_pairs = sigmoid(all_pairs)
-                            scores = all_pairs[edges.T]
+                            if config["classifier"] == "cnn":           
+                                out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)#concat_node_representations_double_triangle
                         
-                        if config["classifier"] == "neg_sig":
-                            all_pairs = torch.mm(out, out.t())
-                            all_pairs = sigmoid(all_pairs)
-                            scores = 1 - all_pairs[edges.T]
+                                scores = sigmoid(cnn(out1))                        
+
+                            if config["classifier"] == "pos_sig":
+                                all_pairs = torch.mm(out, out.t())
+                                all_pairs = sigmoid(all_pairs)
+                                scores = all_pairs[edges.T]
+                            
+                            if config["classifier"] == "neg_sig":
+                                all_pairs = torch.mm(out, out.t())
+                                all_pairs = sigmoid(all_pairs)
+                                scores = 1 - all_pairs[edges.T]
 
                         loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
                         #loss = utils.get_focal_loss_criterion(scores, labels.float())  # Loss function for Focal Loss 
@@ -600,11 +638,14 @@ def main():
         stats_per_batch = config['stats_per_batch']
 
         t = config['threshold']
-        model.eval()
-        if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri":
-            mlp.eval()
-        if config["classifier"] == "cnn":
-            cnn.eval()
+        if config["combined_model"]:
+            combined_model.eval()
+        else:
+            model.eval()
+            if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri":
+                mlp.eval()
+            if config["classifier"] == "cnn":
+                cnn.eval()
         print('--------------------------------')
         print('Computing ROC-AUC score for the validation dataset after training.')
         _thres = config['threshold']
@@ -624,59 +665,62 @@ def main():
                 for (idx, batch) in enumerate(loaders[i]):
                     adj, features, edge_features, edges, labels, dist, triangles = batch
                     labels = labels.to(device)
-                    
-                    # model
-                    if config["gnn_type"] == "dgnn":
-                        dist = dist.float()
-                        features, dist = features.to(device), dist.to(device)
-                        out = model(features, dist)
+                    if config["combined_model"]:
+                        features, edge_features = features.to(device), edge_features.to(device)
+                        scores = combined_model(features, edge_features, edges, triangles)
+                    else:
+                        # model
+                        if config["gnn_type"] == "dgnn":
+                            dist = dist.float()
+                            features, dist = features.to(device), dist.to(device)
+                            out = model(features, dist)
 
-                    if config["gnn_type"] == "egnnc":
-                            features, edge_features = features.to(device), edge_features.to(device)
-                            out = model(features, edge_features)
+                        if config["gnn_type"] == "egnnc":
+                                features, edge_features = features.to(device), edge_features.to(device)
+                                out = model(features, edge_features)
 
-
-                    # classify
-                    if config["classifier"] == "mlp":
-                        
-                        out1, out2 = utils.concat_node_representations_double(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = sigmoid(scores1 + scores2)
 
                         # classify
-                    if config["classifier"] == "mlp_tri":
-                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
-                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                        #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvzw)
-                        scores12 = mlp(uvwz)
-                        scores21 = mlp(vuzw)
-                        scores22 = mlp(vuwz)
-                        scores1 = (scores11 + scores21)/2
-                        scores2 = (scores21 + scores22)/2
-                        scores = sigmoid(scores1 + scores2)
+                        if config["classifier"] == "mlp":
+                            
+                            out1, out2 = utils.concat_node_representations_double(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = sigmoid(scores1 + scores2)
 
-                    if config["classifier"] == "mlp_bi_ntn":
-                        out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = 1-sigmoid(scores1 + scores2)
-                        
-                    if config["classifier"] == "cnn":
-                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)
-                        scores = sigmoid(cnn(out1))
-                        
+                            # classify
+                        if config["classifier"] == "mlp_tri":
+                            #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                            uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                            #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                            scores11 = mlp(uvzw)
+                            scores12 = mlp(uvwz)
+                            scores21 = mlp(vuzw)
+                            scores22 = mlp(vuwz)
+                            scores1 = (scores11 + scores21)/2
+                            scores2 = (scores21 + scores22)/2
+                            scores = sigmoid(scores1 + scores2)
 
-                    if config["classifier"] == "pos_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = all_pairs[edges.T]
-                    
-                    if config["classifier"] == "neg_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = 1 - all_pairs[edges.T]
+                        if config["classifier"] == "mlp_bi_ntn":
+                            out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = 1-sigmoid(scores1 + scores2)
+                            
+                        if config["classifier"] == "cnn":
+                            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)
+                            scores = sigmoid(cnn(out1))
+                            
+
+                        if config["classifier"] == "pos_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = all_pairs[edges.T]
+                        
+                        if config["classifier"] == "neg_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = 1 - all_pairs[edges.T]
 
                     loss = criterion(scores, labels.float()) # Loss function for BCE Loss 
                     #loss = utils.get_focal_loss_criterion(scores, labels.float()) # Loss function for Focal Loss 
@@ -748,11 +792,14 @@ def main():
         #t = config['threshold']
         _thres = config['threshold']
         for t in _thres:
-            model.eval()
-            if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri":
-                mlp.eval()
-            if config["classifier"] == "cnn":
-                cnn.eval()
+            if config["combined_model"]:    
+                combined_model.eval()
+            else:
+                model.eval()
+                if config["classifier"] == "mlp" or config["classifier"] == "mlp_tri":
+                    mlp.eval()
+                if config["classifier"] == "cnn":
+                    cnn.eval()
             print('--------------------------------')
             print('Computing ROC-AUC score for the test dataset after training.')
             running_loss, total_loss = 0.0, 0.0
@@ -770,57 +817,61 @@ def main():
                     adj, features, edge_features, edges, labels, dist, triangles = batch
                     labels = labels.to(device)
                     
-                    # model
-                    if config["gnn_type"] == "dgnn":
-                        dist = dist.float()
-                        features, dist = features.to(device), dist.to(device)
-                        out = model(features, dist)
-                    
-                    if config["gnn_type"] == "egnnc":
-                            features, edge_features = features.to(device), edge_features.to(device)
-                            out = model(features, edge_features)
+                    if config["combined_model"]:
+                        features, edge_features = features.to(device), edge_features.to(device)
+                        scores = combined_model(features, edge_features, edges, triangles)
+                    else:
+                        # model
+                        if config["gnn_type"] == "dgnn":
+                            dist = dist.float()
+                            features, dist = features.to(device), dist.to(device)
+                            out = model(features, dist)
+                        
+                        if config["gnn_type"] == "egnnc":
+                                features, edge_features = features.to(device), edge_features.to(device)
+                                out = model(features, edge_features)
 
-
-                    # classify
-                    if config["classifier"] == "mlp":
-                    
-                        out1, out2 = utils.concat_node_representations_double(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = sigmoid(scores1 + scores2)
 
                         # classify
-                    if config["classifier"] == "mlp_tri":
-                        #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
-                        uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
-                        #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
-                        scores11 = mlp(uvzw)
-                        scores12 = mlp(uvwz)
-                        scores21 = mlp(vuzw)
-                        scores22 = mlp(vuwz)#
-                        scores1 = (scores11 + scores21)/2
-                        scores2 = (scores21 + scores22)/2
-                        scores = sigmoid(scores1 + scores2)
-
-                    if config["classifier"] == "mlp_bi_ntn":
-                        out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
-                        scores1 = mlp(out1)
-                        scores2 = mlp(out2)
-                        scores = 1-sigmoid(scores1 + scores2)
+                        if config["classifier"] == "mlp":
                         
-                    if config["classifier"] == "cnn":
-                        out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)
-                        scores = sigmoid(cnn(out1))                    
+                            out1, out2 = utils.concat_node_representations_double(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = sigmoid(scores1 + scores2)
 
-                    if config["classifier"] == "pos_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = all_pairs[edges.T]
-                    
-                    if config["classifier"] == "neg_sig":
-                        all_pairs = torch.mm(out, out.t())
-                        all_pairs = sigmoid(all_pairs)
-                        scores = 1 - all_pairs[edges.T]
+                            # classify
+                        if config["classifier"] == "mlp_tri":
+                            #uvz, vuz, vzu, uzv, zvu, zuv, uvw, vuw, vwu, uwv, wuv, wvu 
+                            uvzw, uvwz, vuzw, vuwz = utils.concat_node_representations_double_triangle(out, edges, triangles, device)
+                            #out1, out2 = utils.concat_node_representations_double(out, edges, device)#concat_node_representations_double_triangle
+                            scores11 = mlp(uvzw)
+                            scores12 = mlp(uvwz)
+                            scores21 = mlp(vuzw)
+                            scores22 = mlp(vuwz)#
+                            scores1 = (scores11 + scores21)/2
+                            scores2 = (scores21 + scores22)/2
+                            scores = sigmoid(scores1 + scores2)
+
+                        if config["classifier"] == "mlp_bi_ntn":
+                            out1, out2 = utils.concat_node_respresentations_double_with_biNTN(out, edges, device)
+                            scores1 = mlp(out1)
+                            scores2 = mlp(out2)
+                            scores = 1-sigmoid(scores1 + scores2)
+                            
+                        if config["classifier"] == "cnn":
+                            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, device)
+                            scores = sigmoid(cnn(out1))                    
+
+                        if config["classifier"] == "pos_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = all_pairs[edges.T]
+                        
+                        if config["classifier"] == "neg_sig":
+                            all_pairs = torch.mm(out, out.t())
+                            all_pairs = sigmoid(all_pairs)
+                            scores = 1 - all_pairs[edges.T]
                         
                     loss = criterion(scores, labels.float())  # Loss function for BCE Loss 
                    

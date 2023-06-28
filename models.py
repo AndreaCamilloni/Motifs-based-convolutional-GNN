@@ -10,6 +10,8 @@ import layers
 from layers import MeanAggregator, LSTMAggregator, MaxPoolAggregator, MeanPoolAggregator
 from layers import ConvolutionLayer, DGNNConvolutionLayer, AAAgregationLayer, EGNNCLayer, DAAAgregationLayer
 
+import utils as utils
+
 def init_weights(m):
     if type(m) == nn.Linear:
         torch.nn.init.xavier_uniform_(m.weight, gain=1.414)
@@ -241,9 +243,9 @@ class EGNNC(nn.Module):
 
         self.elu = nn.ELU()
         self.egnn1 = EGNNCLayer(input_dim, hidden_dim, channel_dim, device=device)
-        self.egnn2 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
-        self.egnn3 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
-        self.egnn4 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        #self.egnn2 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        #self.egnn3 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        #self.egnn4 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
         #self.egnn5 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
         self.egnn6 = EGNNCLayer(hidden_dim*channel_dim, output_dim, channel_dim, device=device)
 
@@ -263,14 +265,14 @@ class EGNNC(nn.Module):
         x = self.egnn1(features, edge_features)
         x = F.elu(x)
         x = F.dropout(x, self.dropout, training=self.training)
-        x = self.egnn2(x, edge_features)
-        x = F.elu(x)
-        x = F.dropout(x, self.dropout, training=self.training)
-        x = self.egnn3(x, edge_features)
-        x = F.elu(x)
-        x = F.dropout(x, self.dropout, training=self.training)
-        x = self.egnn4(x, edge_features)
-        x = F.elu(x)
+        #x = self.egnn2(x, edge_features)
+        #x = F.elu(x)
+        #x = F.dropout(x, self.dropout, training=self.training)
+        #x = self.egnn3(x, edge_features)
+        #x = F.elu(x)
+        #x = F.dropout(x, self.dropout, training=self.training)
+        #x = self.egnn4(x, edge_features)
+        #x = F.elu(x)
         #x = F.dropout(x, self.dropout, training=self.training)
         #x = self.egnn5(x, edge_features)
         #x = F.elu(x)
@@ -290,12 +292,12 @@ class TriangularMotifsCNN(nn.Module):
         self.training = True
     
     def forward(self, x):
-        x = F.leaky_relu(self.conv1(x))
-        x = F.leaky_relu(self.conv2(x))
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
         x = x.view(x.size(0), -1)  # Flatten the tensor
         
         # Fully connected layers
-        x = F.leaky_relu(self.fc1(x))
+        x = F.relu(self.fc1(x))
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.fc2(x)
         out = x.reshape(-1)
@@ -352,3 +354,37 @@ class MLPTwoLayers(nn.Module):
         x = self.linear2(x)
         out = x.reshape(-1)
         return out
+    
+
+
+
+class CombinedModel(nn.Module):
+    def __init__(self, gnn, classifier, classifier_type = "mlp", device='cpu'):
+        super(CombinedModel, self).__init__()
+        self.gnn = gnn
+        self.classifier = classifier
+        self.classifier_type = classifier_type
+        self.sigmoid = nn.Sigmoid()
+        self.device = device
+         
+
+    def forward(self, features, edge_features, edges, triangles):
+        # Pass graphs through GNN to get node embeddings
+        #features, edge_features = features.to(device), edge_features.to(device)
+        out = self.gnn(features, edge_features)
+        #print("out.shape: ", out.shape)
+        
+        if self.classifier_type == "mlp":
+            out1,out2 = utils.concat_node_representations_double(out, edges, self.device)
+ 
+            score1 = self.classifier(out1)
+            score2 = self.classifier(out2)
+            edge_scores = self.sigmoid(score1 + score2)
+        
+        elif self.classifier_type == "cnn":
+            out = utils.create_TriangularMotifsCNN_input(out, edges, triangles, self.device)
+            
+            scores = self.classifier(out)
+            edge_scores = self.sigmoid(scores)
+
+        return edge_scores
