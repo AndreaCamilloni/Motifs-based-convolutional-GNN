@@ -1015,7 +1015,7 @@ def extract_edge_features(x1, y1, x2, y2, image, model):
 
 ADD_NODE_FEATURES = False
 ADD_EDGE_FEATURES = False #Result in out of memory error
-TRIANGLES_ext = True
+TRIANGLES_ext = False
 
 class KIGraphDatasetSUBGCN(Dataset):
 
@@ -1291,7 +1291,7 @@ class KIGraphDatasetSUBGCN(Dataset):
             # For each node, extract the features from the image
             for _, row in nodes.iterrows():
                 xc, yc = row['x'], row['y']
-                features_resnet = extract_features(int(xc), int(yc), 256, self.image, self.model)
+                features_resnet = extract_features(int(xc), int(yc), 64, self.image, self.model)
                 nodes.at[_, 'morph_features'] = features_resnet
 
             cell_morph_features = nodes['morph_features'].to_numpy()

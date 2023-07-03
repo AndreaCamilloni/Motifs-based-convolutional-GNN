@@ -70,7 +70,7 @@ def main():
     model.to(config['device'])
 
     if config["classifier"] == "mlp":
-        mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*2, hidden_dim=output_dim*2, output_dim=1, dropout=0.5, activation = config['activation_fc'])
+        mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*2, hidden_dim=output_dim*2, output_dim=1, dropout=0.5)
         mlp.to(config["device"])
 
     if config["classifier"] == "mlp_tri":
