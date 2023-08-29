@@ -154,7 +154,7 @@ def get_dataset(args, dataset_folder, setPath=None, add_self_edges=False, is_deb
     datasets = []
     mode, num_layers = args
 
-    # folder = dataset_folder
+    folder = dataset_folder
     #folder = '102445_ep49'
 
     train_paths = []
@@ -162,7 +162,7 @@ def get_dataset(args, dataset_folder, setPath=None, add_self_edges=False, is_deb
     val_paths = []
 
     # folder = "dataset"
-    folder = "ground_truth"
+    #folder = "ground_truth"
 
     
     if not is_debug:
@@ -244,10 +244,10 @@ def get_dataset_gcn(args, dataset_folder, setPath=None, add_self_edges=False, is
     train_paths = []
     test_paths = []
     val_paths = []
-
+    folder = dataset_folder
     dataset_folder = 'datasets'
    
-    folder = "ground_truth"
+    #folder = "ground_truth"
     #folder = "cell_density_dataset"  ### Use only if debug in config.json is true. Used for testing and debuging
     if not is_debug:
         train_glob = glob.glob(
@@ -654,6 +654,7 @@ def create_TriangularMotifsCNN_input(features, edges, triangles, device="cpu"):
         #print("Edge: ", (u,v))
         if not t12 is None:
             z, w = t12[0], t12[1]
+            # for zero-padding use torch.zeros(embedding_dimension)
         else:
             #print("------ Padding ------")
             print("Edge: ", (u,v))
@@ -675,10 +676,114 @@ def create_TriangularMotifsCNN_input(features, edges, triangles, device="cpu"):
     if count> 0:
         print("Padding count: ", count)
     
+    input_data1 = torch.stack([_u,_v,_z,_w], dim=1)
+    input_data1 = input_data1.permute(0,1,2)#.view(-1, 4, 8, 16)
+     
+
+    return input_data1 
+
+
+def create_TriangularMotifsCNN_input_bc(features, edges, triangles, device="cpu"):
+   
+    _u = torch.FloatTensor().to(device)
+    _v = torch.FloatTensor().to(device)
+    _z = torch.FloatTensor().to(device)
+    _w = torch.FloatTensor().to(device)
+    #uv = torch.FloatTensor().to(device)
+    #vu = torch.FloatTensor().to(device)
+    #wz = torch.FloatTensor().to(device)
+    #zw = torch.FloatTensor().to(device)
+    
+    # Normalization
+    #features = (features - features.mean(dim=0))/features.std(dim=0)
+    
+    count = 0
+    for u, v in edges:
+        
+        t12 = triangles.get(frozenset((u,v)))
+        #print("Triangles: ", t12)
+        #print("Edge: ", (u,v))
+        if not t12 is None:
+            z, w = t12[0], t12[1]
+            # for zero-padding use torch.zeros(embedding_dimension)
+        else:
+            #print("------ Padding ------")
+            print("Edge: ", (u,v))
+            count += 1
+            z, w = u, v
+
+        _u = torch.cat((_u, features[u].reshape(1, -1)), dim=0)
+        _v = torch.cat((_v, features[v].reshape(1, -1)), dim=0)
+        _z = torch.cat((_z, features[int(z)].reshape(1, -1)), dim=0)
+        _w = torch.cat((_w, features[int(w)].reshape(1, -1)), dim=0)
+        #uv = torch.cat((uv, torch.cat((features[u], features[v])).reshape(1, -1)), dim=0)
+        #vu = torch.cat((vu, torch.cat((features[v], features[u])).reshape(1, -1)), dim=0)
+        #zw = torch.cat((zw, torch.cat((features[z], features[w])).reshape(1, -1)), dim=0)
+        #wz = torch.cat((wz, torch.cat((features[w], features[z])).reshape(1, -1)), dim=0)
+        
+
+        
+
+    if count> 0:
+        print("Padding count: ", count)
+    
+    input_data1 = torch.stack([_u,_v,_z,_w], dim=1)
+    input_data1 = input_data1.permute(0,1,2)#.view(-1, 4, 8, 16)
+    
+    input_data2 = torch.stack([_v,_u,_z,_w], dim=1)
+    input_data2 = input_data2.permute(0,1,2)
+    
+    input_data3 = torch.stack([_u,_v,_w,_z], dim=1)
+    input_data3 = input_data3.permute(0,1,2)
+    
+    input_data4 = torch.stack([_v,_u,_w,_z], dim=1)
+    input_data4 = input_data4.permute(0,1,2)
+
+    return input_data1, input_data2, input_data3, input_data4
+
+def create_TriangularMotifsCNN_multiple_input(features, edges, triangles, triangles_features, device="cpu"):
+   
+    _u = torch.FloatTensor().to(device)
+    _v = torch.FloatTensor().to(device)
+    _z = torch.FloatTensor().to(device)
+    _w = torch.FloatTensor().to(device)
+
+    dnn_features = torch.FloatTensor().to(device)
+ 
+    # Normalization
+    #features = (features - features.mean(dim=0))/features.std(dim=0)
+    
+    count = 0
+    for u, v in edges:
+        
+        t12 = triangles.get(frozenset((u,v)))
+        #print("Triangles: ", t12)
+        #print("Edge: ", (u,v))
+        if not t12 is None:
+            z, w = t12[0], t12[1]
+        else:
+            #print("------ Padding ------")
+            print("Edge: ", (u,v))
+            count += 1
+            z, w = u, v
+
+        _u = torch.cat((_u, features[u].reshape(1, -1)), dim=0)
+        _v = torch.cat((_v, features[v].reshape(1, -1)), dim=0)
+        _z = torch.cat((_z, features[int(z)].reshape(1, -1)), dim=0)
+        _w = torch.cat((_w, features[int(w)].reshape(1, -1)), dim=0)
+
+        dnn_features = torch.cat((dnn_features, triangles_features[frozenset((u,v))].to(device).reshape(1, -1)), dim=0) 
+    
+        
+
+    if count> 0:
+        print("Padding count: ", count)
+    
     input_data = torch.stack([_u,_v,_z,_w], dim=1)
     input_data = input_data.permute(0,1,2)#.view(-1, 4, 8, 16)
 
-    return input_data
+    return input_data, dnn_features
+    
     
 def create_TriangularMotifsCNN_input_uv(features, edges, triangles, device="cpu"):
    

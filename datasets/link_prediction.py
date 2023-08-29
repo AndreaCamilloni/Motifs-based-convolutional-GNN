@@ -487,7 +487,10 @@ class KIGraphDatasetGCN(Dataset):
         #print('Neighborhood Similarity Shape : ' + str(neighborhood_similarity_edges.shape))
 
 
-        edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges), axis=0)
+        #edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges), axis=0) #ablation1234
+        edge_features = np.concatenate((edge_densities, delta_entropy_edges, distances_close_to_edges), axis=0)                                 #ablation 123
+        #edge_features = np.concatenate((edge_densities, distances_close_to_edges), axis=0)                                                      #ablation 12
+        #edge_features = np.concatenate((distances_close_to_edges), axis=0)                                                                      #ablation 1
         #edge_features = delta_entropy_edges
         #print(edge_features)
         # self.edge_features = utils.normalize_edge_feature_doubly_stochastic(edge_features) ### not to be used
@@ -966,6 +969,7 @@ def extract_features(xc, yc, patch_size, image, model):
     return features
 
 def extract_edge_features(x1, y1, x2, y2, image, model):
+    """
     if x2 < x1:
         x1, x2 = x2, x1
     if y2 < y1:
@@ -991,6 +995,22 @@ def extract_edge_features(x1, y1, x2, y2, image, model):
     if y2 > image.shape[1]:
         y2 = image.shape[1]
         y1 = y2 - 32
+    """
+    xc, yc = (x1+x2)//2, (y1+y2)//2
+    patch_size = 128
+    # check if the patch is outside the image
+    if xc-patch_size//2 < 0:
+        xc = patch_size//2
+    if yc-patch_size//2 < 0:
+        yc = patch_size//2
+    if xc+patch_size//2 > image.shape[0]:
+        xc = image.shape[0] - patch_size//2
+    if yc+patch_size//2 > image.shape[1]:
+        yc = image.shape[1] - patch_size//2
+
+    x1, y1 = xc-patch_size//2, yc-patch_size//2
+    x2, y2 = xc+patch_size//2, yc+patch_size//2
+
         
     # Extract the patch from the image
     patch = image[x1:x2, y1:y2, :]
@@ -1015,7 +1035,8 @@ def extract_edge_features(x1, y1, x2, y2, image, model):
 
 ADD_NODE_FEATURES = False
 ADD_EDGE_FEATURES = False #Result in out of memory error
-TRIANGLES_ext = False
+ADD_MOTIF_FEATURES = False
+TRIANGLES_ext = True
 
 class KIGraphDatasetSUBGCN(Dataset):
 
@@ -1062,7 +1083,8 @@ class KIGraphDatasetSUBGCN(Dataset):
             self.triangles_dict = dict()
 
         ## TODO: ADD a condintion to check if the node features are required or not
-        if ADD_NODE_FEATURES or ADD_EDGE_FEATURES:
+        if ADD_NODE_FEATURES or ADD_EDGE_FEATURES or ADD_MOTIF_FEATURES:
+            #image_path = '..\\..\\intelligraph\\slides\\' + path[0].split('\\')[1] + '.tif'
             image_path = 'datasets\\images\\' + path[0].split('\\')[1] + '.tif'
             image = Image.open(image_path)
             image = image.convert('RGB')
@@ -1177,6 +1199,9 @@ class KIGraphDatasetSUBGCN(Dataset):
             edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges, morph_features.permute(2, 0, 1)), axis=0)
         
         else:
+            #edge_features = distances_close_to_edges #e1
+            #edge_features = np.concatenate((edge_densities, distances_close_to_edges), axis=0) #E12
+            #edge_features = np.concatenate((edge_densities, delta_entropy_edges, distances_close_to_edges), axis=0) #E123
             edge_features = np.concatenate((edge_densities, delta_entropy_edges, neighborhood_similarity_edges, distances_close_to_edges), axis=0)
         
         #edge_features = delta_entropy_edges
@@ -1280,8 +1305,8 @@ class KIGraphDatasetSUBGCN(Dataset):
         #mean_neigh_entropy = np.array(mean_neigh_entropy)
         #mean_neigh_entropy = mean_neigh_entropy.astype(np.float64)
 
-        #graph_node_features = np.concatenate((cell_types_scores, cell_density[:,None], cell_entropy[:,None]), axis=1 )  ### Concatenate all features 
-        #self.features = torch.from_numpy(graph_node_features).float()  # Cell features 
+        graph_node_features = np.concatenate((cell_types_scores, cell_density[:,None]), axis=1 )# , cell_entropy[:,None]), axis=1 )  ### Concatenate all features 
+        
 
 
 
@@ -1304,6 +1329,26 @@ class KIGraphDatasetSUBGCN(Dataset):
         else:
             ### Use this self feature if only one-hot embedding is required as node feature set
             self.features = torch.from_numpy(cell_types_scores).float()  # Cell features with just one-hot encoding 
+            #self.features = torch.from_numpy(graph_node_features).float()  # Cell features 
+
+        self.triangle_morph_features = dict()
+        if ADD_MOTIF_FEATURES:
+            edges['morph_features'] = None
+
+            # For each edge, extract the features from the image
+            for _, row in edges.iterrows():
+                x1, y1 = nodes.loc[nodes['id'] == row['source']]['x'], nodes.loc[nodes['id'] == row['source']]['y']
+                x2, y2 = nodes.loc[nodes['id'] == row['target']]['x'], nodes.loc[nodes['id'] == row['target']]['y']
+                features = extract_edge_features(int(x1), int(y1), int(x2), int(y2), self.image, self.model)
+                edges.at[_, 'morph_features'] = features
+                u,v = int(row['source']), int(row['target'])
+                
+                self.triangle_morph_features[frozenset((u,v))] =torch.from_numpy( features).float()
+                 
+
+            #triangle_morph_features = edges['morph_features'].to_numpy()
+            #self.triangle_morph_features = np.stack( np.array(triangle_morph_features), axis=0).astype(np.float64)
+            #self.triangle_morph_features = torch.from_numpy(self.triangle_morph_features).float()  # Cell features
 
         print('self.features.shape:', self.features.shape)
         # [2] end
@@ -1440,7 +1485,7 @@ class KIGraphDatasetSUBGCN(Dataset):
         labels = torch.FloatTensor([sample[1] for sample in batch])
         dist = torch.from_numpy(self.dist)
 
-        return adj, features, edge_features, edges, labels, dist, self.triangles_dict
+        return adj, features, edge_features, edges, labels, dist, self.triangles_dict, self.triangle_morph_features
 
     def get_dims(self):
         print("self.features.shape: {}".format(self.features.shape))

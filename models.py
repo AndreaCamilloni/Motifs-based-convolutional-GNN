@@ -243,11 +243,11 @@ class EGNNC(nn.Module):
 
         self.elu = nn.ELU()
         self.egnn1 = EGNNCLayer(input_dim, hidden_dim, channel_dim, device=device)
-        self.egnn2 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
-        self.egnn3 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
-        self.egnn4 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
+        self.egnn2 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim*2, channel_dim, device=device)
+        self.egnn3 = EGNNCLayer(hidden_dim*channel_dim*2, hidden_dim*3, channel_dim, device=device)
+        self.egnn4 = EGNNCLayer(hidden_dim*channel_dim*3, hidden_dim*2, channel_dim, device=device)
         #self.egnn5 = EGNNCLayer(hidden_dim*channel_dim, hidden_dim, channel_dim, device=device)
-        self.egnn6 = EGNNCLayer(hidden_dim*channel_dim, output_dim, channel_dim, device=device)
+        self.egnn6 = EGNNCLayer(hidden_dim*channel_dim*2, output_dim, channel_dim, device=device)
 
     def forward(self, features, edge_features):
         """
@@ -276,7 +276,7 @@ class EGNNC(nn.Module):
         x = F.dropout(x, self.dropout, training=self.training)
         #x = self.egnn5(x, edge_features)
         #x = F.elu(x)
-        
+        #x = F.dropout(x, self.dropout, training=self.training)
         x = self.egnn6(x, edge_features)
         
         return x
@@ -368,7 +368,7 @@ class CombinedModel(nn.Module):
         self.device = device
          
 
-    def forward(self, features, edge_features, edges, triangles):
+    def forward(self, features, edge_features, edges, triangles, dnn_features = None):
         # Pass graphs through GNN to get node embeddings
         #features, edge_features = features.to(device), edge_features.to(device)
         out = self.gnn(features, edge_features)
@@ -382,9 +382,54 @@ class CombinedModel(nn.Module):
             edge_scores = self.sigmoid(score1 + score2)
         
         elif self.classifier_type == "cnn":
-            out = utils.create_TriangularMotifsCNN_input(out, edges, triangles, self.device)
+            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, self.device)
             
-            scores = self.classifier(out)
+            scores1 = self.classifier(out1)
+            #scores2 = self.classifier(out2)
+            #scores3 = self.classifier(out3)
+            #scores4 = self.classifier(out4)
+            scores = scores1#+scores2+scores3+scores4
+            edge_scores = self.sigmoid(scores)
+
+        elif self.classifier_type == "cnn_multiple_input":
+            #out, abs_features = utils.create_TriangularMotifsCNN_multiple_input(out, edges, triangles, dnn_features, self.device)
+            #scores = self.classifier(out,abs_features)
+            out1,out2,out3,out4 = utils.create_TriangularMotifsCNN_input_bc(out, edges, triangles, self.device)
+            scores1 = self.classifier(out1)
+            scores2 = self.classifier(out2)
+            scores3 = self.classifier(out3)
+            scores4 = self.classifier(out4)
+            scores = scores1+scores2+scores3+scores4
+            
+            
             edge_scores = self.sigmoid(scores)
 
         return edge_scores
+
+
+class TriangularMotifsCNN_multiple_input(nn.Module):
+    def __init__(self, num_channels = 4, output_dim = 1, dropout=0.5, device='cpu', input_size = 64):
+        super(TriangularMotifsCNN_multiple_input, self).__init__()
+        self.conv1 = nn.Conv1d(num_channels, 16, kernel_size=3, stride=1, padding=1).to(device)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=3, stride=1, padding=1).to(device)
+        self.fc11 = nn.Linear(32 * input_size, 128, bias=True).to(device)  # Adjust the input size based on your data
+        self.fc12 = nn.Linear(512, 128, bias=True).to(device)  # Adjust the input size based on your data
+        self.fc2 = nn.Linear(256, output_dim, bias=True).to(device)  # Output size is 1  for regression
+        self.dropout = dropout
+        self.training = True
+    
+    def forward(self, x1, x2 ):
+        x1 = F.relu(self.conv1(x1))
+        x1 = F.relu(self.conv2(x1))
+        x1 = x1.view(x1.size(0), -1)  # Flatten the tensor
+        #print("x1 shape:",x1.shape)
+        # Fully connected layers
+        x1 = F.relu(self.fc11(x1))
+        x2 = F.relu(self.fc12(x2))
+        x = torch.cat((x1, x2), dim=-1)
+
+        x = F.dropout(x, self.dropout, training=self.training)
+        x = self.fc2(x)
+        out = x.reshape(-1)
+        
+        return out
