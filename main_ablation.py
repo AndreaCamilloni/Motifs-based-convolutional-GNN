@@ -82,13 +82,12 @@ def main():
         mlp = models.MLPTwoLayers(input_dim=channel_dim*output_dim*2 + ntn_embedding_size, hidden_dim=output_dim*2, output_dim=1, dropout=0.5)
         mlp.to(config["device"])             
 
-    if config["classifier"] == "cnn":
-        cnn = models.TriangularMotifsCNN(num_channels = 4, input_size=channel_dim*output_dim )
+    if config["classifier"] == "cnn_single_tri":
+        cnn = models.TriangularMotifsCNN(num_channels = 3, input_size=channel_dim*output_dim )
         cnn.to(config["device"])
     
-    if config["classifier"] == "cnn_multiple_input":
+    if config["classifier"] == "cnn_double_tri":
         cnn = models.TriangularMotifsCNN(num_channels = 4)
-        #cnn = models.TriangularMotifsCNN_multiple_input(num_channels = 4)
         cnn.to(config["device"])
 
     classifier = mlp if config["classifier"] == "mlp" else cnn

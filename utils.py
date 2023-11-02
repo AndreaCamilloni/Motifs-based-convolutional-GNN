@@ -17,6 +17,8 @@ from scipy.signal import savgol_filter
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 from itertools import combinations
 
 import networkx as nx
@@ -80,6 +82,35 @@ def export_prediction_as_json(image_name, mode, edges, neg_edges, results_dir, m
     with open(f"{results_dir}/{model_id}_{image_name}_{mode}_edges_result.json", 'w') as f:
         f.write(str(jsonString))
 
+def export_node_prediction_as_json(image_name, mode, nodes, neg_nodes, results_dir, model_id):
+    print("saving results...")
+    all_nodes = []
+
+    print("nodes:", nodes)
+    print("neg_nodes:", neg_nodes)
+    nodes_copy = nodes.copy()  # .tolist()
+    for i in range(len(nodes_copy)):
+        nodes_copy[i].append(1)  # crossing edge
+
+    neg_nodes_copy = neg_nodes.copy()  # .tolist()
+    for i in range(len(neg_nodes)):
+        neg_nodes_copy[i].append(0)  # close to edge
+
+    all_nodes.extend(nodes_copy)
+    all_nodes.extend(neg_nodes_copy)
+    jsonString = json.dumps(all_nodes, cls=NpEncoder)
+
+    # Create folder and json file if not exists
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+    if not os.path.exists(f"{results_dir}/{model_id}_{image_name}_{mode}_nodes_result.json"):
+        open(f"{results_dir}/{model_id}_{image_name}_{mode}_nodes_result.json", 'w').close()
+
+
+
+    with open(f"{results_dir}/{model_id}_{image_name}_{mode}_nodes_result.json", 'w') as f:
+        f.write(str(jsonString))
+
 
 
 def get_agg_class(agg_class):
@@ -94,6 +125,48 @@ def get_agg_class(agg_class):
         Aggregator class.
     """
     return getattr(sys.modules[__name__], agg_class)
+
+
+
+def compute_weakly_loss(scores, labels, nodes, adj_matrix, lambda_val=0.2):
+    """
+    Compute the total loss for weakly-supervised node classification.
+    
+    Parameters:
+    - scores: Tensor of predicted probabilities for each node being in class 1.
+    - labels: Tensor of true labels, with -1 indicating unlabeled nodes.
+    - nodes: List of node indices corresponding to the scores and labels.
+    - adj_matrix: Adjacency matrix of the graph.
+    - lambda_val: Weight for the consistency loss.
+    
+    Returns:
+    - total_loss: The total loss combining supervised and consistency losses.
+    """
+ 
+    adj_matrix = adj_matrix.squeeze(0)
+    # Mask for labeled nodes
+    labeled_mask = (labels != -1)
+    
+    # Supervised Loss for labeled nodes
+    labeled_scores = scores[labeled_mask]
+    labeled_labels = labels[labeled_mask]
+    supervised_loss = F.binary_cross_entropy(labeled_scores, labeled_labels)
+    
+    # Consistency Loss
+    scores1 = scores.view(-1, 1)
+    scores2 = scores.view(1, -1)
+    
+    # Get adjacency sub-matrix for the given nodes
+    sub_adj_matrix = adj_matrix[nodes, :][:, nodes]
+    
+    consistency_loss = torch.sum(sub_adj_matrix * (scores1 - scores2) ** 2)
+    
+    # Total Loss
+    total_loss = supervised_loss + lambda_val * consistency_loss
+    
+    return total_loss
+
+
 
 def get_criterion(task):
     """
@@ -301,6 +374,87 @@ def get_dataset_gcn(args, dataset_folder, setPath=None, add_self_edges=False, is
                 datasets.append(dataset)
     else:
         class_attr = getattr(importlib.import_module('datasets.link_prediction'), 'KIGraphDatasetSUBGCN')
+        dataset = class_attr(setPath, mode, num_layers)
+        datasets.append(dataset)
+
+    return datasets
+
+def get_node_dataset_gcn(args, dataset_folder, setPath=None, add_self_edges=False, is_debug=False):
+    """
+    Parameters
+    ----------
+    args : tuple
+        Tuple of task, dataset name and other arguments required by the dataset constructor.
+    setPath: list
+        List of path data, example ['P7_HE_Default_Extended_3_1', (0, 2000, 0, 2000), 'datasets/annotations/P7_annotated/P7_HE_Default_Extended_3_1.txt']
+    Returns
+    -------
+    dataset : torch.utils.data.Dataset
+        The dataset.
+    """
+    datasets = []
+    mode, num_layers = args
+
+    train_paths = []
+    test_paths = []
+    val_paths = []
+    folder = dataset_folder
+    dataset_folder = 'datasets'
+   
+    #folder = "ground_truth"
+    #folder = "cell_density_dataset"  ### Use only if debug in config.json is true. Used for testing and debuging
+    if not is_debug:
+        train_glob = glob.glob(
+            f'{dataset_folder}/{folder}/Train/*')
+        test_glob = glob.glob(
+            f'{dataset_folder}/{folder}/Test/*')
+        val_glob = glob.glob(
+            f'{dataset_folder}/{folder}/Val/*')
+    else:
+        train_glob = glob.glob(
+            f'datasets/{folder}_debug/Train/*')
+        test_glob = glob.glob(
+            f'datasets/{folder}_debug/Test/*')
+        val_glob = glob.glob(
+            f'datasets/{folder}_debug/Val/*')
+
+
+    train_glob = sorted(train_glob)
+    test_glob = sorted(test_glob)
+    val_glob = sorted(val_glob)
+    print(len(train_glob))
+
+    for i in range(0, len(train_glob), 2):
+        train_paths.append([train_glob[i].split('/')[-1]
+        .replace('_delaunay_orig_forGraphSAGE_edges.csv', ''), train_glob[i], train_glob[i+1]])
+
+    for i in range(0, len(test_glob), 2):
+        test_paths.append([test_glob[i].split('/')[-1]
+        .replace('_delaunay_orig_forGraphSAGE_edges.csv', ''), test_glob[i], test_glob[i+1]])
+    
+    for i in range(0, len(val_glob), 2):
+        val_paths.append([val_glob[i].split('/')[-1]
+        .replace('_delaunay_orig_forGraphSAGE_edges.csv', ''), val_glob[i], val_glob[i+1]])
+
+
+    if setPath == None:
+        if mode == 'train':
+            for path in train_paths:
+                class_attr = getattr(importlib.import_module('datasets.node_prediction'), 'KIGraphDatasetSUBGCN')
+                dataset = class_attr(path, mode, num_layers, add_self_edges)
+                datasets.append(dataset)
+        elif mode == 'val':
+            for path in val_paths:
+                class_attr = getattr(importlib.import_module('datasets.node_prediction'), 'KIGraphDatasetSUBGCN')
+                dataset = class_attr(path, mode, num_layers, add_self_edges)
+                datasets.append(dataset)
+        elif mode == 'test':
+            for path in test_paths:
+                class_attr = getattr(importlib.import_module('datasets.node_prediction'), 'KIGraphDatasetSUBGCN')
+                dataset = class_attr(path, mode, num_layers, add_self_edges)
+                datasets.append(dataset)
+    else:
+        class_attr = getattr(importlib.import_module('datasets.node_prediction'), 'KIGraphDatasetSUBGCN')
         dataset = class_attr(setPath, mode, num_layers)
         datasets.append(dataset)
 
@@ -575,83 +729,22 @@ def concat_node_respresentations_double_with_biNTN(features, edges,  device="cpu
 
     return out1,out2
 
-
-def concat_node_representations_double_triangle(features, edges, triangles, device="cpu"):
-  
-
-    uvzw = torch.FloatTensor().to(device)
-    vuzw = torch.FloatTensor().to(device)
-    uvwz = torch.FloatTensor().to(device)
-    vuwz = torch.FloatTensor().to(device)
-    
-    count = 0
-    for u, v in edges:
-        
-        t12 = triangles.get(frozenset((u,v)))
-        #print("Triangles: ", t12)
-        #print("Edge: ", (u,v))
-        if not t12 is None:
-            #print("------ Padding ------")
-            z, w = t12[0], t12[1]
-        else: 
-            count += 1
-            z, w = u, v
-
-
-        #zz = features[u] + features[v] + features[z]
-        #zw =  features[u] + features[v] + features[w]
-        
-        #uvz = torch.cat((uvz, torch.cat((features[u], features[v], zz)).reshape(1, -1)), dim=0)
-        #vuz = torch.cat((vuz, torch.cat((features[v], features[u], zz)).reshape(1, -1)), dim=0)
-        #vzu = torch.cat((vzu, torch.cat((features[v], features[z], features[u])).reshape(1, -1)), dim=0)
-        #uzv = torch.cat((uzv, torch.cat((features[u], features[z], features[v])).reshape(1, -1)), dim=0)
-        #zuv = torch.cat((zuv, torch.cat((features[z], features[u], features[v])).reshape(1, -1)), dim=0)
-        #zvu = torch.cat((zvu, torch.cat((features[z], features[v], features[u])).reshape(1, -1)), dim=0)
-
-        #uvw = torch.cat((uvw, torch.cat((features[u], features[v], zw)).reshape(1, -1)), dim=0)
-        #vuw = torch.cat((vuw, torch.cat((features[v], features[u], zw)).reshape(1, -1)), dim=0)
-        #vwu = torch.cat((vwu, torch.cat((features[v], features[w], features[u])).reshape(1, -1)), dim=0)
-        #uwv = torch.cat((uwv, torch.cat((features[u], features[w], features[v])).reshape(1, -1)), dim=0)
-        #wuv = torch.cat((wuv, torch.cat((features[w], features[u], features[v])).reshape(1, -1)), dim=0)
-        #wvu = torch.cat((wvu, torch.cat((features[w], features[v], features[u])).reshape(1, -1)), dim=0)
-
-
-        #node12 = torch.cat((features[node1], features[node2])).reshape(1, -1)
-        #node21 = torch.cat((features[node2], features[node1])).reshape(1, -1)
  
-        #out1 = torch.cat((out1, node12), dim=0)
-        #print('<<<<< Out put concat shape ' + str(out1.shape))
-        #out2 = torch.cat((out2, node21), dim=0)
-        uvzw = torch.cat((uvzw, torch.cat((features[u], features[z],features[w], features[v])).reshape(1, -1)), dim=0)
-        uvwz = torch.cat((uvwz, torch.cat((features[u], features[w], features[z], features[v])).reshape(1, -1)), dim=0)
-        vuzw = torch.cat((vuzw, torch.cat((features[v], features[z], features[w], features[u])).reshape(1, -1)), dim=0)
-        vuwz = torch.cat((vuwz, torch.cat((features[v], features[w], features[z], features[u])).reshape(1, -1)), dim=0)
-    
-    if count >0:
-        print("Padding count: ", count)
-    
-    return uvzw, uvwz, vuzw, vuwz
 
-def create_TriangularMotifsCNN_input(features, edges, triangles, device="cpu"):
+def triangle_motifs(features, edges, triangles, device="cpu"):
    
     _u = torch.FloatTensor().to(device)
     _v = torch.FloatTensor().to(device)
     _z = torch.FloatTensor().to(device)
     _w = torch.FloatTensor().to(device)
-    #uv = torch.FloatTensor().to(device)
-    #vu = torch.FloatTensor().to(device)
-    #wz = torch.FloatTensor().to(device)
-    #zw = torch.FloatTensor().to(device)
-    
+ 
     # Normalization
     #features = (features - features.mean(dim=0))/features.std(dim=0)
-    
     count = 0
     for u, v in edges:
         
         t12 = triangles.get(frozenset((u,v)))
-        #print("Triangles: ", t12)
-        #print("Edge: ", (u,v))
+    
         if not t12 is None:
             z, w = t12[0], t12[1]
             # for zero-padding use torch.zeros(embedding_dimension)
@@ -665,44 +758,39 @@ def create_TriangularMotifsCNN_input(features, edges, triangles, device="cpu"):
         _v = torch.cat((_v, features[v].reshape(1, -1)), dim=0)
         _z = torch.cat((_z, features[int(z)].reshape(1, -1)), dim=0)
         _w = torch.cat((_w, features[int(w)].reshape(1, -1)), dim=0)
-        #uv = torch.cat((uv, torch.cat((features[u], features[v])).reshape(1, -1)), dim=0)
-        #vu = torch.cat((vu, torch.cat((features[v], features[u])).reshape(1, -1)), dim=0)
-        #zw = torch.cat((zw, torch.cat((features[z], features[w])).reshape(1, -1)), dim=0)
-        #wz = torch.cat((wz, torch.cat((features[w], features[z])).reshape(1, -1)), dim=0)
         
-
         
 
     if count> 0:
         print("Padding count: ", count)
     
-    input_data1 = torch.stack([_u,_v,_z,_w], dim=1)
-    input_data1 = input_data1.permute(0,1,2)#.view(-1, 4, 8, 16)
+    tri1 = torch.stack([_u,_v,_z], dim=1)
+    tri2 = torch.stack([_u,_v,_w], dim=1)
+    tri1 = tri1.permute(0,1,2)#.view(-1, 4, 8, 16)
+    tri2 = tri2.permute(0,1,2) 
+
+    # univariant
+    #tri11 = torch.stack([_u,_v,_z], dim=1)
+    #tri21 = torch.stack([_u,_v,_w], dim=1)
+    #tri12 = torch.stack([_v,_u,_z], dim=1)
+    #tri22 = torch.stack([_v,_u,_w], dim=1)
      
 
-    return input_data1 
+    return tri1, tri2
 
-
-def create_TriangularMotifsCNN_input_bc(features, edges, triangles, device="cpu"):
+ 
+def kite_motifs(features, edges, triangles, device="cpu",UNIVARIANT=False):
    
     _u = torch.FloatTensor().to(device)
     _v = torch.FloatTensor().to(device)
     _z = torch.FloatTensor().to(device)
     _w = torch.FloatTensor().to(device)
-    #uv = torch.FloatTensor().to(device)
-    #vu = torch.FloatTensor().to(device)
-    #wz = torch.FloatTensor().to(device)
-    #zw = torch.FloatTensor().to(device)
-    
-    # Normalization
-    #features = (features - features.mean(dim=0))/features.std(dim=0)
-    
+ 
     count = 0
     for u, v in edges:
         
         t12 = triangles.get(frozenset((u,v)))
-        #print("Triangles: ", t12)
-        #print("Edge: ", (u,v))
+ 
         if not t12 is None:
             z, w = t12[0], t12[1]
             # for zero-padding use torch.zeros(embedding_dimension)
@@ -716,23 +804,20 @@ def create_TriangularMotifsCNN_input_bc(features, edges, triangles, device="cpu"
         _v = torch.cat((_v, features[v].reshape(1, -1)), dim=0)
         _z = torch.cat((_z, features[int(z)].reshape(1, -1)), dim=0)
         _w = torch.cat((_w, features[int(w)].reshape(1, -1)), dim=0)
-        #uv = torch.cat((uv, torch.cat((features[u], features[v])).reshape(1, -1)), dim=0)
-        #vu = torch.cat((vu, torch.cat((features[v], features[u])).reshape(1, -1)), dim=0)
-        #zw = torch.cat((zw, torch.cat((features[z], features[w])).reshape(1, -1)), dim=0)
-        #wz = torch.cat((wz, torch.cat((features[w], features[z])).reshape(1, -1)), dim=0)
-        
-
-        
 
     if count> 0:
         print("Padding count: ", count)
     
+
     input_data1 = torch.stack([_u,_v,_z,_w], dim=1)
     input_data1 = input_data1.permute(0,1,2)#.view(-1, 4, 8, 16)
     
     input_data2 = torch.stack([_v,_u,_z,_w], dim=1)
     input_data2 = input_data2.permute(0,1,2)
     
+    if not UNIVARIANT:
+        return input_data1, input_data2
+
     input_data3 = torch.stack([_u,_v,_w,_z], dim=1)
     input_data3 = input_data3.permute(0,1,2)
     
@@ -740,157 +825,26 @@ def create_TriangularMotifsCNN_input_bc(features, edges, triangles, device="cpu"
     input_data4 = input_data4.permute(0,1,2)
 
     return input_data1, input_data2, input_data3, input_data4
-
-def create_TriangularMotifsCNN_multiple_input(features, edges, triangles, triangles_features, device="cpu"):
-   
-    _u = torch.FloatTensor().to(device)
-    _v = torch.FloatTensor().to(device)
-    _z = torch.FloatTensor().to(device)
-    _w = torch.FloatTensor().to(device)
-
-    dnn_features = torch.FloatTensor().to(device)
  
-    # Normalization
-    #features = (features - features.mean(dim=0))/features.std(dim=0)
-    
-    count = 0
-    for u, v in edges:
-        
-        t12 = triangles.get(frozenset((u,v)))
-        #print("Triangles: ", t12)
-        #print("Edge: ", (u,v))
-        if not t12 is None:
-            z, w = t12[0], t12[1]
-        else:
-            #print("------ Padding ------")
-            print("Edge: ", (u,v))
-            count += 1
-            z, w = u, v
-
-        _u = torch.cat((_u, features[u].reshape(1, -1)), dim=0)
-        _v = torch.cat((_v, features[v].reshape(1, -1)), dim=0)
-        _z = torch.cat((_z, features[int(z)].reshape(1, -1)), dim=0)
-        _w = torch.cat((_w, features[int(w)].reshape(1, -1)), dim=0)
-
-        dnn_features = torch.cat((dnn_features, triangles_features[frozenset((u,v))].to(device).reshape(1, -1)), dim=0) 
-    
-        
-
-    if count> 0:
-        print("Padding count: ", count)
-    
-    input_data = torch.stack([_u,_v,_z,_w], dim=1)
-    input_data = input_data.permute(0,1,2)#.view(-1, 4, 8, 16)
-
-    return input_data, dnn_features
-    
     
 def create_TriangularMotifsCNN_input_uv(features, edges, triangles, device="cpu"):
    
-    _u = torch.FloatTensor().to(device)
-    _v = torch.FloatTensor().to(device)
- 
-    
-    # Normalization
-    #features = (features - features.mean(dim=0))/features.std(dim=0)
-    
-    count = 0
-    for u, v in edges:
-        
-
-        _u = torch.cat((_u, features[u].reshape(1, -1)), dim=0)
-        _v = torch.cat((_v, features[v].reshape(1, -1)), dim=0)
-        
-    
-    #input_data = torch.stack([_u,_v,_z,_w], dim=1)
-    input_data = torch.stack([_u,_v], dim=1)
-    input_data = input_data.permute(0,1,2)#.view(-1, 4, 8, 16)
-
-    return input_data
+    pass
     
 def create_TriangularMotifsCNN_input_old(features, edges, triangles, device="cpu"):
- 
-    uvz = torch.FloatTensor().to(device)
-    uvw = torch.FloatTensor().to(device)
-    vuz = torch.FloatTensor().to(device)
-    vuw = torch.FloatTensor().to(device)
-     
-    
-    count = 0
-    for u, v in edges:
-        
-        t12 = triangles.get(frozenset((u,v)))
-        #print("Triangles: ", t12)
-        #print("Edge: ", (u,v))
-        if not t12 is None:
-            z, w = t12[0], t12[1]
-        else:
-            #print("------ Padding ------")
-            print("Edge: ", (u,v))
-            count += 1
-            z, w = u, v
-        z,w = int(z), int(w)
-        uvz = torch.cat((uvz, torch.cat((features[u], features[v], features[z])).reshape(1, -1)), dim=0)
-        uvw = torch.cat((uvw, torch.cat((features[u], features[v], features[w])).reshape(1, -1)), dim=0)
-        vuz = torch.cat((vuz, torch.cat((features[v], features[u], features[z])).reshape(1, -1)), dim=0)
-        vuw = torch.cat((vuw, torch.cat((features[v], features[u], features[w])).reshape(1, -1)), dim=0)
-         
-     
-    #print("uvz.shape: ", uvz.shape)
-    input_data = torch.stack([uvz, uvw, vuz, vuw], dim=1)   
-    #print("input_data.shape: ", input_data.shape)
-    input_data = input_data.view(-1, 4*3, 8, 8) 
-    #print("input_data.shape: ", input_data.shape)
+    pass
 
-    return input_data
+def node_input(features, nodes,  device="cpu"):
+   
+    _u = torch.FloatTensor().to(device)
+     
+    for u in nodes:
+ 
+        _u = torch.cat((_u, features[u].reshape(1, -1)), dim=0) 
+    return _u
 
 def concat_node_representations_double_triangle_tmp(features, edges, triangles, device="cpu"):
-  
-    ntn_layer = layers.BiTensorNetworkModule().to(device)
-
-    
-    uvzw = torch.FloatTensor().to(device)
-    vuzw = torch.FloatTensor().to(device)
-    uvwz = torch.FloatTensor().to(device)
-    vuwz = torch.FloatTensor().to(device)
-    
-    count = 0
-    for u, v in edges:
-        
-        t12 = triangles.get(frozenset((u,v)))
-        #print("Triangles: ", t12)
-        #print("Edge: ", (u,v))
-        if not t12 is None:
-            #print("------ Padding ------")
-            z, w = t12[0], t12[1]
-        else: 
-            count += 1
-            z, w = u, v
-        
-        
-        ntn_emd_1 = ntn_layer(features[z], features[w])
-        ntn_emd_2 = ntn_layer(features[w], features[z])
-
-        ntn_emd_1 = torch.reshape(ntn_emd_1, (-1,))
-        ntn_emd_2 = torch.reshape(ntn_emd_2, (-1,))
-        #print('Node shape: '+ str(features[u].shape))
-        #print('NTN shape: '+ str(ntn_emd_1.shape))
- 
- 
-        
-        
-        
-        
-        uvzw = torch.cat((uvzw, torch.cat((features[u], features[v],ntn_emd_1)).reshape(1, -1)), dim=0)
-        uvwz = torch.cat((uvwz, torch.cat((features[u], features[v], ntn_emd_2)).reshape(1, -1)), dim=0)
-        vuzw = torch.cat((vuzw, torch.cat((features[v], features[u], ntn_emd_1)).reshape(1, -1)), dim=0)
-        vuwz = torch.cat((vuwz, torch.cat((features[v], features[u], ntn_emd_2)).reshape(1, -1)), dim=0)
-    
-    if count >0:
-        print("Padding count: ", count)
-    
-    return uvzw, uvwz, vuzw, vuwz
-
+    pass
 
 
 def parse_args():

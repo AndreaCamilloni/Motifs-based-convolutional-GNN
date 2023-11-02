@@ -381,55 +381,23 @@ class CombinedModel(nn.Module):
             score2 = self.classifier(out2)
             edge_scores = self.sigmoid(score1 + score2)
         
-        elif self.classifier_type == "cnn":
-            out1 = utils.create_TriangularMotifsCNN_input(out, edges, triangles, self.device)
-            
-            scores1 = self.classifier(out1)
-            #scores2 = self.classifier(out2)
-            #scores3 = self.classifier(out3)
-            #scores4 = self.classifier(out4)
-            scores = scores1#+scores2+scores3+scores4
-            edge_scores = self.sigmoid(scores)
+        elif self.classifier_type == "cnn_kites":
+            out = utils.kite_motifs(out, edges, triangles, self.device, UNIVARIANT = True) #if univariant we have multiple outputs
+            scores = []
+            for i in range(len(out)):
+                scores.append(self.classifier(out[i]))
+            edge_scores = self.sigmoid(sum(scores)) 
 
-        elif self.classifier_type == "cnn_multiple_input":
-            #out, abs_features = utils.create_TriangularMotifsCNN_multiple_input(out, edges, triangles, dnn_features, self.device)
-            #scores = self.classifier(out,abs_features)
-            out1,out2,out3,out4 = utils.create_TriangularMotifsCNN_input_bc(out, edges, triangles, self.device)
+        elif self.classifier_type == "cnn_triangles":
+            out1, out2 = utils.triangle_motifs(out, edges, triangles, self.device)
+            
             scores1 = self.classifier(out1)
             scores2 = self.classifier(out2)
-            scores3 = self.classifier(out3)
-            scores4 = self.classifier(out4)
-            scores = scores1+scores2+scores3+scores4
-            
-            
+            #scores3 = self.classifier(out3)
+            #scores4 = self.classifier(out4)
+            scores = scores1+scores2#+scores3+scores4
             edge_scores = self.sigmoid(scores)
+ 
 
         return edge_scores
-
-
-class TriangularMotifsCNN_multiple_input(nn.Module):
-    def __init__(self, num_channels = 4, output_dim = 1, dropout=0.5, device='cpu', input_size = 64):
-        super(TriangularMotifsCNN_multiple_input, self).__init__()
-        self.conv1 = nn.Conv1d(num_channels, 16, kernel_size=3, stride=1, padding=1).to(device)
-        self.conv2 = nn.Conv1d(16, 32, kernel_size=3, stride=1, padding=1).to(device)
-        self.fc11 = nn.Linear(32 * input_size, 128, bias=True).to(device)  # Adjust the input size based on your data
-        self.fc12 = nn.Linear(512, 128, bias=True).to(device)  # Adjust the input size based on your data
-        self.fc2 = nn.Linear(256, output_dim, bias=True).to(device)  # Output size is 1  for regression
-        self.dropout = dropout
-        self.training = True
-    
-    def forward(self, x1, x2 ):
-        x1 = F.relu(self.conv1(x1))
-        x1 = F.relu(self.conv2(x1))
-        x1 = x1.view(x1.size(0), -1)  # Flatten the tensor
-        #print("x1 shape:",x1.shape)
-        # Fully connected layers
-        x1 = F.relu(self.fc11(x1))
-        x2 = F.relu(self.fc12(x2))
-        x = torch.cat((x1, x2), dim=-1)
-
-        x = F.dropout(x, self.dropout, training=self.training)
-        x = self.fc2(x)
-        out = x.reshape(-1)
-        
-        return out
+ 
